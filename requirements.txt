@@ -1,10 +1,11 @@
-# Install CUDA-enabled PyTorch separately; see README.
+# CUDA-enabled PyTorch is required.
 torch==2.7.1
 transformers==4.53.3
 datasets==3.6.0
 huggingface-hub==0.33.4
 accelerate==1.8.1
 safetensors==0.5.3
+bitsandbytes>=0.46,<0.48
 numpy==2.2.6
 scipy==1.15.3
 scikit-learn==1.6.1
