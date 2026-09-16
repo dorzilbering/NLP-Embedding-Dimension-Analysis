@@ -1,199 +1,265 @@
 # Embedding Dimensionality and NLP Performance
 
 This project evaluates frozen pretrained text representations at different output
-widths using training-only PCA and task-appropriate evaluation. The final deliverables
+widths using training-only PCA and task-specific evaluation. The final deliverables
 will be reproducible code and an academic PDF report. No LLM fine-tuning is used.
 
-## Completed pilot
+## Execution status
 
-The original Phi-4-mini / English STS pilot **successfully ran in Google Colab**:
-NVIDIA Tesla T4 (~15 GB VRAM), PyTorch `2.11.0+cu128`, CUDA available, and 9 tests passed.
-It used 2,000 PCA training sentences, 300 validation pairs, and seed 42.
+**Phi4-mini × English STSB: all four required dimensions executed successfully**
+in Google Colab on a Tesla T4 (~15 GB VRAM), PyTorch `2.11.0+cu128`, CUDA available.
+The owner reported 34 passing tests in that environment before this extension.
+The executed configuration used 2,000 PCA training sentences, **300 validation
+pairs**, seed 42, batch size 4 and a 256-token limit. This is a subset experiment,
+not a full STSB benchmark evaluation.
 
 | Dimension | Representation | Cosine Spearman |
 |---:|---|---:|
 | 3072 | Native | 0.3620005218131407 |
-| 768 | PCA | 0.33006447482450463 |
-| 384 | PCA | 0.31506961347171786 |
+| 1536 | PCA | 0.342132 |
+| 768 | PCA | 0.330040 |
+| 384 | PCA | 0.315128 |
 
-These are actual results reported by the project owner. The original `scores.csv`,
-`results.json`, `predictions.json`, `pca.npz`, and plot were generated and backed up
-in Google Drive. They were not present in this local checkout during this update;
-no result artifacts have been reconstructed or independently verified here.
+These are the owner's executed four-dimension results, quoted at the supplied
+precision. Artifacts under `results/phi_stsb_4dims/` were backed up to Google Drive;
+they are not reconstructed here. Earlier three-dimension pilot scores belong to a
+separate run. A 1536-component randomized PCA fit can produce slightly different
+768/384 scores from a 768-component fit; do not splice the two runs.
 
-**New, not yet GPU-executed:** configurable dimensions including the missing **1536**.
-The other models/tasks remain planned, not implemented or evaluated. The final report
-has not been generated. This validation-subset pilot does not complete the full STS task.
+**SciFact, Banking77 and Arxiv-Clustering:** evaluation infrastructure implemented
+and tested offline on synthetic data; **no real datasets/models evaluated** for
+these tasks. Verified dataset bundles are still required before execution. Other
+models, a full benchmark sweep, and the final PDF report remain future work.
 
-## Methodology (preserved)
+## Representation and PCA
 
-- Model: `microsoft/Phi-4-mini-instruct`; dataset: English `mteb/stsbenchmark-sts`.
-- Freeze the backbone. Extract its final normalized hidden state at the **last
-  attention-mask-valid token**. Plain text, tokenizer-default special tokens, no
-  chat template or added EOS. The pinned tokenizer disables automatic BOS/EOS.
-- Use the existing BF16-if-supported / FP16-otherwise loading policy. No quantization.
-- Deduplicate training texts and exclude normalized matches against **all validation
-  and test sentences**. Test labels never fit PCA or enter pilot scoring.
-- Cache native float32 vectors. Fit randomized PCA on L2-normalized training
-  embeddings only, with centering, no whitening, and seed 42. Fit enough components
-  for the largest requested reduced width; smaller widths use prefixes of this PCA
-  basis, not prefixes of the original hidden coordinates.
-- Apply the frozen transform to evaluation vectors and L2-normalize again. The
-  native baseline is L2-normalized without centering. Evaluate cosine Spearman.
+- Frozen `microsoft/Phi-4-mini-instruct`, final normalized hidden state at the
+  **last attention-mask-valid token**. Plain text; tokenizer-default special tokens,
+  no chat template or added EOS. Existing extraction/batching checks are preserved.
+- Existing BF16-if-supported / FP16-otherwise loading; no quantization or fine-tuning.
+- Native float32 vectors are cached independently of requested output dimensions.
+- Fit randomized PCA on L2-normalized **training/reference vectors only**, seed 42,
+  centering enabled, no whitening. Fit the largest requested reduced width once;
+  smaller widths take prefixes of the ordered PCA basis. Normalize projected vectors.
+  The native baseline is normalized without centering. PCA changes centering as well
+  as width and does not reduce backbone VRAM or encoding cost.
+- For new tasks, sample 2,000 reference/train rows deterministically for PCA; train
+  the classifier or clusterer on the entire designated fit partition. Banking77 PCA
+  samples distinct training texts, while its classifier retains all 10,003 train rows. PCA requires
+  more rows than components and sufficient effective rank (checked at runtime).
+- Reject canonical text overlap between fit and evaluation inputs, including all
+  retrieval queries and corpus documents. Dataset provenance also requires human
+  review: text checks cannot establish split authenticity or detect paraphrases.
 
-The evaluator uses MTEB's English STS dataset and cosine-Spearman metric directly,
-not the full MTEB runner. Exact/normalized overlap exclusion does not detect every
-semantic paraphrase. PCA changes centering as well as width, and does not reduce
-backbone VRAM or encoding computation.
+## Task protocols
 
-### Backward compatibility
+All dimensions use identical texts, splits, seeds and downstream settings. Scores
+are reported on their native scales, not multiplied by 100. Different task metrics
+must not be averaged as if they were interchangeable.
 
-`python run_pilot.py` retains the original **3072/768/384** defaults and 768-component
-PCA. Existing filenames, extraction settings, sampling, and Phi native-cache keys
-are preserved. Pass `--dimensions 3072 1536 768 384` for all required Phi widths.
+| Task | Protocol | Primary / additional metrics |
+|---|---|---|
+| STSB | Unchanged pilot: 300 validation pairs; cosine similarity; 2,000 train sentences with overlap exclusion against **all validation/test sentences** | Cosine Spearman [-1, 1] |
+| SciFact | Exact cosine ranking over the complete supplied corpus; same frozen PCA transform for queries and documents; macro average over supplied evaluation queries | nDCG@10 / Recall@10, Recall@100, MRR@10 |
+| Banking77 | L2-normalized vectors; logistic regression fitted only on designated train; predict all 3,080 official test rows | Accuracy / macro-F1 |
+| Arxiv-Clustering | **Inductive** MiniBatchKMeans: fit reference vectors, freeze centroids, predict held-out vectors; one explicitly selected subset/variant per run | V-measure / adjusted Rand, NMI |
 
-The four-width run fits **1536** PCA components instead of 768. Because the existing
-solver is randomized, its 768/384 outputs may differ slightly from the original run.
-Compare each complete run using its own metadata; do not overwrite or splice the
-historical results. At least 1537 eligible calibration sentences are required;
-2,000 remains the default. Runtime checks additionally enforce sufficient rank.
+**Retrieval:** linear relevance gain with log2 discount; unjudged documents count as
+zero relevance; positive grade means relevant for recall/MRR. Every selected query
+must have a positive judgment. Ties use ascending document ID. Query IDs, corpus
+IDs and qrels remain separate; query/corpus fitting is forbidden. Corpus text is
+`title + "\n" + abstract`; queries remain claim text. Evaluation uses the supplied
+corpus; do not silently restrict it to relevant documents. Results from corpus
+subsets must be labelled as subsets. Independent PCA reference data is unresolved:
+SciFact's small training query set alone cannot supply 2,000 calibration sentences.
+
+**Classification:** verified dataset `PolyAI/banking77`, fields `text` and `label`,
+77 intents, official train (10,003 rows) for all fitting and official test (3,080 rows)
+for evaluation only. scikit-learn logistic regression, `C=1`, `solver=lbfgs`,
+`max_iter=1000`, `tol=1e-4`, no class weighting, fixed seed. No evaluation-based
+hyperparameter tuning; convergence warnings stop execution. Macro-F1 uses the fixed
+training label universe (all 77 for full Banking77), zero for undefined class scores.
+This is a full-designated-training protocol, not MTEB's few-shot classification score.
+
+**Clustering:** `init=k-means++`, `n_init=10`, `max_iter=100`, `batch_size=1024`,
+`tol=0`, `max_no_improvement=10`, `reassignment_ratio=0.01`, fixed seed. Supply `K`
+from a predefined taxonomy or a training-only decision, **never evaluation labels**.
+NMI uses arithmetic averaging. No evaluation examples fit centroids. This differs
+from conventional/MTEB clustering that fits clusters on the set being scored, so
+scores must be labelled **custom inductive clustering**, not standard MTEB results.
+Arxiv S2S/P2P, revision, subset, reference source and K remain unverified. Do not
+repurpose an official test partition as training. The current runner evaluates one
+subset per invocation; multi-subset aggregation is future work.
+
+The project does not use the MTEB runner. It preserves the working STSB data/metric,
+uses standard task metrics, and records explicit custom protocols. See
+[task bundle specification](docs/task_data.md) for the required data contract and
+remaining source verification. SciFact/arXiv Hugging Face IDs remain unset. Banking77 has a dedicated
+data-only preparation command; it discovers the configuration and pins the resolved
+dataset commit before loading. No configuration is guessed.
 
 ## Required experiment matrix
 
-Every row is required on **each of the four tasks**: 84 model/dimension/task
-configurations before repetitions. Metadata lives in `pilot/config.py`.
+Each model is required on each of the four tasks: **84 model/task/dimension
+configurations**, before repetitions. Only Phi has an executable model adapter.
 
-| Model | Native width | Required widths | Checkpoint/implementation status |
+| Model | Native width | Required widths | Status |
 |---|---:|---|---|
-| Qwen3-8B | 4096 | 4096, 2048, 1024, 512, 256 | ID/revision/loading adapter unverified |
+| Qwen3-8B | 4096 | 4096, 2048, 1024, 512, 256 | ID/revision/loading unverified |
 | Gemma3-4B | 2560 | 2560, 1280, 640, 320 | ID/revision/text adapter unverified |
-| Llama3.2-3B | 3072 | 3072, 1536, 768, 384 | ID/revision/loading adapter unverified |
-| Phi4-mini | 3072 | 3072, 1536, 768, 384 | Existing checkpoint verified in pilot; 1536 unexecuted |
-| Mistral-7B | 4096 | 4096, 2048, 1024, 512 | Version/ID/loading adapter unverified |
+| Llama3.2-3B | 3072 | 3072, 1536, 768, 384 | ID/revision/loading unverified |
+| Phi4-mini | 3072 | 3072, 1536, 768, 384 | STSB subset executed; three task evaluators offline-tested |
+| Mistral-7B | 4096 | 4096, 2048, 1024, 512 | Version/ID/loading unverified |
 
-| Task | Assignment dataset | Implementation status |
-|---|---|---|
-| Retrieval | SciFact | Future; evaluator/revision/reference-data policy pending |
-| Classification | Banking77 | Future; classifier protocol/version pending |
-| Clustering | Arxiv-Clustering | Future; S2S/P2P/version/reference-data policy unresolved |
-| STS | STSB (English STS Benchmark) | Phi validation-subset pilot only |
+## Installation and hardware
 
-Unverified Hugging Face IDs are `None`, not guesses. Metadata-only dry-runs return
-`executable: false` and blockers for future combinations. Execution rejects them
-before importing model libraries or accessing the network.
-
-## Hardware and loading strategy
-
-The existing Phi pilot is verified on a Colab T4 with ~15 GB VRAM. The runner keeps
-its >=10 GiB free-memory guard and refuses CPU model execution. Use the verified
-batch size (default 4), 256-token limit, and the original CUDA-enabled environment.
-The new PCA fit uses more CPU time/RAM; 32 GB host RAM provides comfortable headroom,
-although actual usage has not been measured for this extension.
-
-The explicit current strategy is `native-auto-16bit`. Future model loaders must
-implement and record their strategy; unknown strategies fail validation. A 7B/8B
-model may approach/exceed T4 VRAM with 16-bit weights alone, before activations;
-naive FP32 loading is even larger. There is **no automatic quantization/offload**.
-Options needing later approval/testing are a larger GPU, explicit CPU offload
-(with throughput implications), or separately labelled quantization experiments.
-Checkpoint access/licensing, text-backbone selection, attention implementation,
-batch size, and peak VRAM still need validation for each new model.
-
-## Installation
-
-Python 3.11/3.12 was used for local validation. The original standalone environment
-remains specified in `requirements.txt` (PyTorch 2.7.1) and `requirements-dev.txt`.
-It is not the same as the reported successful Colab PyTorch 2.11.0 environment.
-
-**Existing working Colab:** preserve installed dependencies. Do not install
-`requirements.txt` or `requirements-dev.txt` there, since they would request a
-PyTorch downgrade. Recover original non-PyTorch package versions from the saved
-`results.json`/environment export for exact historical reproduction.
-
-**Fresh Colab only**, with an already compatible CUDA-enabled PyTorch:
+Preserve the existing working Colab environment. Do not install `requirements.txt`
+or `requirements-dev.txt` there: their standalone PyTorch pin differs from the
+verified Colab version. For a **fresh** Colab with compatible CUDA-enabled PyTorch:
 
 ```python
 %cd /content/NLP-Embedding-Dimension-Analysis
 %pip install -r requirements-colab.txt
 ```
 
-This installs the project's non-PyTorch pins and pytest while keeping the current
-PyTorch. It is a setup candidate, not an exact lock of the historical Colab runtime.
-Restart the runtime if requested after installation, then check `python -m pip check`.
+This pins non-PyTorch dependencies; it is not a complete lock of the historical
+Colab runtime. Check `python -m pip check` after any installation. Standalone local
+validation uses Python 3.11/3.12 and the original requirements/dev files. No new
+packages are needed for this extension.
 
-## Offline validation (no models or inference)
+Phi is verified on the T4 for the stated STSB workload. The unchanged loader refuses
+CPU execution and requires >=10 GiB free GPU memory. Use batch 4 and max length 256;
+new-task runtime/peak memory are not yet measured. Long arXiv texts may be truncated;
+counts are recorded. Embeddings/PCA/downstream fitting also require host RAM; the
+current implementation holds each task's native vectors in memory. Estimate
+`4 × number_of_texts × 3072` bytes for raw vectors, plus PCA/normalized copies and
+working memory; large arXiv variants need a separate capacity review.
 
-From the repository root:
+The explicit loading strategy remains `native-auto-16bit`. 7B/8B weights plus
+activations may exceed ~15 GB T4 VRAM. No automatic quantization/offload changes the
+methodology. Larger GPUs or explicitly reviewed loading strategies are later work.
 
-```bash
-python -m pytest -q
-python run_pilot.py --list-matrix
-python run_pilot.py --dry-run --dimensions 3072 1536 768 384
-python run_pilot.py --dry-run --model Qwen3-8B --task SciFact --train-sentences 3000
-```
+## Offline validation and next Colab commands
 
-Dry-run uses only the standard library. It validates widths, duplicate dimensions,
-PCA sample-count bounds and loading strategy; it does not verify actual dataset
-availability/rank or GPU feasibility. Offline tests use tiny arrays, test doubles,
-and a tiny randomly initialized architecture, never pretrained weights. Temporary
-fixtures are not experimental results.
-
-## Next Colab run (after transferring these local changes)
-
-In the existing verified environment, first run:
+Transfer/review the changes in the existing checkout first. These commands do not
+load Phi, download datasets, or run GPU inference:
 
 ```python
 %cd /content/NLP-Embedding-Dimension-Analysis
-!python -m pytest -q
+!HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m pytest -q
 !python run_pilot.py --dry-run --dimensions 3072 1536 768 384
+!python run_experiment.py --task STSB --dry-run
+!python run_experiment.py --task SciFact --dry-run
+!python run_experiment.py --task Banking77 --dry-run
+!python run_experiment.py --task Arxiv-Clustering --dry-run
 ```
 
-Then, when ready to execute remotely:
+Dry-run uses only the standard library. For new tasks, a valid configuration without
+data prints `executable: false` with actionable blockers and exits successfully.
+This is a configuration inspection, **not** evidence that a dataset is ready.
+Invalid supplied bundles/configurations fail. Once reviewed bundles exist, add
+`--data data/<bundle>.json`; arXiv additionally needs `--clusters <verified-K>`.
+No arbitrary K or dataset variant is supplied as a default. Actual execution rejects
+blockers before importing the model loader. Dry-run cannot verify GPU fit, PCA rank,
+dataset authenticity or scientific suitability of the reference pool.
+
+## Banking77 data preparation (CPU only, no language model)
+
+The official train/test protocol is verified; real Banking77 experiments are still
+**unexecuted**. In the existing Colab environment, after transferring these changes:
 
 ```python
-!python run_pilot.py --check-hardware
-!python run_pilot.py --dimensions 3072 1536 768 384 --train-sentences 2000 --validation-pairs 300 --batch-size 4 --max-length 256 --seed 42 --output results/phi_stsb_4dims
+!python prepare_banking77.py --dry-run
+!python prepare_banking77.py --output data/banking77_official.json
+!python run_experiment.py --task Banking77 --data data/banking77_official.json --dimensions 3072 1536 768 384 --train-sentences 2000 --seed 42 --dry-run
 ```
 
-Use a fresh output directory. No push or remote run is performed by this update.
-New metadata records requested widths, fitted PCA width, and loading strategy.
+Only the second command accesses Hugging Face and downloads **dataset files**, not
+models. It resolves `main` to an immutable commit SHA, discovers the sole available
+configuration (or requires an explicit `--configuration` if ambiguous), and records
+both. Reproduce that export with `--revision <recorded-SHA>` and a fresh output path.
+The preparation dry-run needs only the standard library and does not verify remote
+contents. Do not set Hugging Face offline environment variables for the actual
+preparation command. Existing dependency files suffice; no new packages are added.
+
+Preparation checks exactly 10,003 train / 3,080 test rows, fields `text`/`label`,
+matching 77-class label definitions, label coverage, and train/test text separation.
+Texts and row order are preserved; split-prefixed IDs and content hashes are saved.
+Duplicate same-label training rows are retained for classification; PCA samples
+only distinct training texts. Normalized train/test overlap, conflicting duplicate
+training labels, or unexpected source structure **stops preparation** without silently
+filtering official rows. Such a failure requires review before running an experiment.
+The command never overwrites an existing bundle; bundles live under ignored `data/`.
+
+The runner accepts only the full official Banking77 contract, not arbitrary subsets
+or validation splits. Classifier settings and data remain identical across dimensions.
+Accuracy is primary; macro-F1 is secondary. The default 2,000-row PCA calibration
+sample is entirely training-derived. No test data fit PCA or classifier parameters.
+
+## Execution interface and compatibility
+
+`run_pilot.py` is unchanged: its default remains 3072/768/384 and its original
+outputs/cache keys remain intact. The new entry point defaults to all four required
+Phi dimensions. For STSB it delegates to the existing pilot without changing its
+sampling, PCA, scoring, or original result files. For example, **only when a future
+GPU execution is approved**, a fresh STSB run would use:
+
+```bash
+python run_experiment.py --task STSB --dimensions 3072 1536 768 384 --train-sentences 2000 --validation-pairs 300 --batch-size 4 --max-length 256 --seed 42 --output results/phi_stsb_new_run
+```
+
+New tasks use the same interface with `--data` (and arXiv `--clusters`). Use a fresh
+output directory; nonempty directories are rejected. Existing backed-up results
+must not be overwritten. This update performs no real runs.
 
 ## Outputs and reproducibility
 
-Outputs retain `scores.csv`, `results.json`, `predictions.json`, `pca.npz`, and
-`dimension_vs_spearman.png`; CSV rows and plot ticks follow the requested widths.
-Native-only runs skip PCA fitting and `pca.npz`. Native caches remain under
-`cache/native/`; dimension changes do not invalidate an otherwise matching cache.
-A rerun still initializes the encoder and validates batching, even with cache hits.
+New-task runs write `metrics.csv`, `results.json`, `predictions.json`, and `pca.npz`
+when reduction is requested. STSB through the new entry point adds `metrics.csv`
+to its usual `scores.csv`, JSONs, PCA and plot. Historical files are not converted
+or edited. Common metric rows contain:
 
-Pinned revisions remain:
+`model, task, dataset, dataset_revision, split, dimension, reduction, metric, score,
+seed, protocol, n_eval`.
 
-- Model: `cfbefacb99257ffa30c83adab238a50856ac3083`
-- Dataset: `96943a16ea6a35129e253c659081cb59daf81b30`
+Metadata records the full plan/protocol, dataset and reference provenance, bundle
+hash, fit/evaluation IDs, PCA calibration IDs/text hashes, representation/revision,
+package versions, hardware, seed, cache hits, truncation counts, elapsed time and peak
+GPU allocation. Predictions preserve evaluation ID alignment; retrieval saves the
+top 100 ranked document IDs and cosine scores per query. Keep the exact input bundle
+with the run to recover labels/qrels; its hash is recorded. Seeded PCA, fitting and
+sampling are reproducible within a compatible environment, not necessarily bitwise
+identical across hardware/library versions. Save `python -m pip freeze` and back up
+real outputs and source bundles. Generated data/results/caches remain Git-ignored.
 
-Results include resolved revisions, calibration hashes, validation indices, package
-versions, hardware, and truncation counts. Save `python -m pip freeze` alongside
-real results and back them up. Numerical identity across environments is not guaranteed.
-Generated artifacts and credentials remain ignored by Git.
+Pinned existing revisions:
 
-## Architecture and next boundaries
+- Phi: `cfbefacb99257ffa30c83adab238a50856ac3083`
+- English STSB: `96943a16ea6a35129e253c659081cb59daf81b30`
 
-- `run_pilot.py`: backward-compatible Phi/STSB runner, CLI validation, exports/plot.
-- `pilot/config.py`: assignment registry, explicit loading policy, offline plan validation.
-- `pilot/model.py`: unchanged verified Phi loader/pooling; future adapters remain separate.
-- `pilot/core.py`: shared validation, native cache (configurable width), PCA, scoring.
-- `tests/`: offline regression and configuration tests.
+## Architecture
 
-Later work can add model adapters returning native vectors and task evaluators
-consuming transformed vectors. The runner should orchestrate **reference extraction
--> fit reducer -> freeze reducer -> evaluation**. Retrieval queries/documents must
-share one fitted transform. Each new task needs an explicit training/reference
-manifest; none may silently fit PCA on evaluation data. MTEB adapters, additional
-loaders, and a general experiment runner are future work, not implemented stubs.
+- `run_pilot.py`: unchanged backward-compatible STSB entry point.
+- `run_experiment.py`: task-aware CLI, offline planning, legacy delegation, Phi orchestration.
+- `pilot/config.py`: assignment model/task registry; explicit loading policy.
+- `pilot/task_config.py`: task protocols and readiness checks.
+- `pilot/task_data.py`: local bundle loading, provenance and leakage validation.
+- `pilot/banking77.py`, `prepare_banking77.py`: official Banking77 contract and data-only export.
+- `pilot/task_runner.py`: shared native extraction -> training-only PCA -> task evaluation -> common exports.
+- `pilot/evaluation.py`: retrieval, classifier and inductive clustering evaluators.
+- `pilot/core.py`, `pilot/model.py`: unchanged verified PCA/cache/extraction utilities.
+- `tests/`: existing regressions plus synthetic task/data/runner tests.
+
+Later model adapters can supply native vectors to the shared engine, after checkpoint,
+representation and memory validation. SciFact/arXiv dataset exporters, MTEB integration, additional
+model loaders, multi-subset arXiv aggregation, actual new-task runs and the report
+remain outside this step.
 
 ## References
 
 - [Phi model](https://huggingface.co/microsoft/Phi-4-mini-instruct)
 - [English STS dataset](https://huggingface.co/datasets/mteb/stsbenchmark-sts)
-- [MTEB task definitions](https://docs.mteb.org/overview/available_tasks/semantic-similarity/)
-- [PCA documentation](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)
+- [BEIR retrieval evaluation](https://github.com/beir-cellar/beir)
+- [Logistic regression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html)
+- [MiniBatchKMeans](https://scikit-learn.org/stable/modules/generated/sklearn.cluster.MiniBatchKMeans.html)
+- [MTEB clustering tasks](https://docs.mteb.org/overview/available_tasks/clustering/)

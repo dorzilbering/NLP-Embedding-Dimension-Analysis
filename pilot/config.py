@@ -9,9 +9,9 @@ MODEL_SPECS = {
     "Mistral-7B": {"native_dimension": 4096, "dimensions": (4096, 2048, 1024, 512), "model_id": None},
 }
 TASK_SPECS = {
-    "SciFact": {"type": "retrieval", "dataset_id": None, "status": "retrieval adapter and revision unverified"},
-    "Banking77": {"type": "classification", "dataset_id": None, "status": "classification protocol/version unverified"},
-    "Arxiv-Clustering": {"type": "clustering", "dataset_id": None, "status": "S2S/P2P and task version unresolved"},
+    "SciFact": {"type": "retrieval", "dataset_id": None, "status": "local-bundle retrieval implemented; dataset revision/reference source unverified"},
+    "Banking77": {"type": "classification", "dataset_id": "PolyAI/banking77", "status": "official train/test protocol verified; preparation resolves immutable revision"},
+    "Arxiv-Clustering": {"type": "clustering", "dataset_id": None, "status": "inductive clustering implemented; S2S/P2P, revision and reference source unresolved"},
     "STSB": {"type": "sts", "dataset_id": "mteb/stsbenchmark-sts", "status": "English validation pilot implemented"},
 }
 LEGACY_DIMENSIONS = (3072, 768, 384)
@@ -51,7 +51,7 @@ def make_plan(model="Phi4-mini", task="STSB", dimensions=None, train_count=2000,
         blockers.append("Model-specific loading strategy and T4 memory feasibility are not validated.")
     if task != "STSB":
         blockers.append(TASK_SPECS[task]["status"])
-        blockers.append("Leakage-safe reference data and evaluator are not implemented for this task.")
+        blockers.append("Use run_experiment.py with reviewed task data; run_pilot.py remains STSB-only.")
     return {"model": model, "model_id": spec["model_id"], "task": task,
             "dataset_id": TASK_SPECS[task]["dataset_id"], "native_dimension": spec["native_dimension"],
             "dimensions": list(dimensions), "pca_components": components,
@@ -65,5 +65,7 @@ def make_plan(model="Phi4-mini", task="STSB", dimensions=None, train_count=2000,
 def assignment_matrix():
     return {"models": MODEL_SPECS, "tasks": TASK_SPECS,
             "required_evaluation_configurations": sum(len(s["dimensions"]) for s in MODEL_SPECS.values()) * len(TASK_SPECS),
-            "implemented_pair": ["Phi4-mini", "STSB"],
+            "implemented_pair": ["Phi4-mini", "STSB"],  # Legacy runner compatibility.
+            "task_aware_runner": "run_experiment.py",
+            "implemented_task_infrastructure": list(TASK_SPECS),
             "note": "Metadata is a plan, not evidence of executed experiments; null IDs need verification."}
