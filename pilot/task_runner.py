@@ -1,103 +1,45 @@
-"""Shared offline evaluation pipeline; the caller supplies a frozen native encoder."""
-import csv
-import json
+"""Shared task evaluation; caller supplies native encoder and shared PCA calibration."""
+import csv,json
 from pathlib import Path
-
 import numpy as np
+from pilot.core import checked,fit_pca,normalize,project
+from pilot.evaluation import classification,retrieval
+from pilot.task_data import fingerprint,validate_bundle
 
-from pilot.core import checked, fit_pca, normalize, project
-from pilot.evaluation import classification, retrieval
-from pilot.task_data import fingerprint, text_key, validate_bundle
+def fit_shared_pca(calibration,plan,encode):
+    if not plan["pca_components"]: return None
+    texts=calibration["texts"]; x=checked(encode(texts),len(texts),plan["native_dimension"])
+    return fit_pca(x,plan["pca_components"],plan["seed"])
 
-
-def evaluate_bundle(bundle, plan, encode):
-    """Fit on reference/train only; reuse a single PCA basis across dimensions."""
-    task = plan["task"]
-    validate_bundle(bundle, task)
-    if task == "Arxiv-Clustering":
+def evaluate_bundle(bundle,plan,encode,calibration):
+    task=plan["task"]; validate_bundle(bundle,task); pca=fit_shared_pca(calibration,plan,encode)
+    if task=="Arxiv-Clustering":
         from pilot.arxiv import evaluate_arxiv
-        return evaluate_arxiv(bundle, plan, encode)
-    fit_rows = bundle["reference"] if task == "SciFact" else bundle["train"]
-    width, seed = plan["native_dimension"], plan["seed"]
-    groups = {"fit": fit_rows}
-    if task == "SciFact":
-        groups.update(queries=bundle["queries"], corpus=bundle["corpus"])
-    else:
-        groups["evaluation"] = bundle["evaluation"]
-    vectors = {name: checked(encode([r["text"] for r in records]), len(records), width)
-               for name, records in groups.items()}
-    count = len(fit_rows) if task == "SciFact" else plan["pca_train_sentences"]
-    candidates = list(range(len(fit_rows)))
-    if task == "Banking77":
-        first_by_text = {}
-        for i, row in enumerate(fit_rows):
-            first_by_text.setdefault(text_key(row["text"]), i)
-        candidates = list(first_by_text.values())
-    if plan["pca_components"] and count > len(candidates):
-        raise ValueError("Insufficient fitting rows for PCA.")
-    indices = ((candidates if task == "SciFact" else np.random.default_rng(seed).permutation(candidates)[:count])
-               if plan["pca_components"] else [])
-    pca = fit_pca(vectors["fit"][indices], plan["pca_components"], seed) if len(indices) else None
-    rows, predictions = [], {}
-    for dimension in plan["dimensions"]:
-        transformed = {name: normalize(x) if dimension == width else project(x, pca, dimension)
-                       for name, x in vectors.items()}
-        if task == "SciFact":
-            scores, pred = retrieval(transformed["queries"], [r["id"] for r in bundle["queries"]],
-                                     transformed["corpus"], [r["id"] for r in bundle["corpus"]], bundle["qrels"])
-            evaluation_rows = bundle["queries"]
-        elif task == "Banking77":
-            evaluation_rows = bundle["evaluation"]
-            scores, pred = classification(transformed["fit"], [r["label"] for r in fit_rows],
-                                          transformed["evaluation"], [r["label"] for r in evaluation_rows], seed)
-        else:
-            raise ValueError("Unknown task evaluator.")
-        predictions[str(dimension)] = pred
-        for metric, score in scores.items():
-            if not np.isfinite(score):
-                raise ValueError("Non-finite task score.")
-            rows.append({"model": plan["model"], "task": task, "dataset": bundle["source"]["dataset_id"],
-                         "dataset_revision": bundle["source"]["revision"],
-                         "split": bundle["source"]["evaluation_split"], "dimension": dimension,
-                         "reduction": "native" if dimension == width else "pca", "metric": metric,
-                         "score": float(score), "seed": seed, "protocol": plan["protocol"]["id"],
-                         "n_eval": len(evaluation_rows)})
-    metadata = {"schema_version": 1, "plan": plan, "bundle_hash": fingerprint(bundle),
-                "source": bundle["source"], "fit_source": bundle["fit_source"],
-                "pca_fit_ids": [fit_rows[i]["id"] for i in indices],
-                "pca_fit_text_hashes": [fingerprint(fit_rows[i]["text"]) for i in indices],
-                "fit_ids": [r["id"] for r in fit_rows],
-                "evaluation_ids": [r["id"] for r in evaluation_rows],
-                "pca": {"components": plan["pca_components"], "pre_normalize": True, "whiten": False,
-                        "solver": "randomized", "native_centered": False},
-                "leakage_check": "canonical fit/evaluation text disjointness; provenance asserted by bundle author"}
-    return rows, {"evaluation_ids": metadata["evaluation_ids"], "by_dimension": predictions}, metadata, pca
+        rows,pred,meta=evaluate_arxiv(bundle,plan,encode,pca); meta["calibration_hash"]=calibration["manifest_hash"]; return rows,pred,meta,pca
+    width=plan["native_dimension"]
+    if task=="SciFact": groups={"queries":bundle["queries"],"corpus":bundle["corpus"]}
+    else: groups={"fit":bundle["train"],"evaluation":bundle["evaluation"]}
+    vectors={n:checked(encode([r["text"] for r in rs]),len(rs),width) for n,rs in groups.items()}
+    rows=[]; predictions={}
+    for dim in plan["dimensions"]:
+        transformed={n:(normalize(x) if dim==width else project(x,pca,dim)) for n,x in vectors.items()}
+        if task=="SciFact":
+            scores,pred=retrieval(transformed["queries"],[r["id"] for r in bundle["queries"]],transformed["corpus"],[r["id"] for r in bundle["corpus"]],bundle["qrels"]); n_eval=len(bundle["queries"])
+        elif task=="Banking77":
+            scores,pred=classification(transformed["fit"],[r["label"] for r in bundle["train"]],transformed["evaluation"],[r["label"] for r in bundle["evaluation"]],plan["seed"]); n_eval=len(bundle["evaluation"])
+        else: raise ValueError("Unknown task")
+        predictions[str(dim)]=pred
+        for metric,score in scores.items(): rows.append({"model":plan["model"],"task":task,"dataset":bundle["source"]["dataset_id"],"dataset_revision":bundle["source"]["revision"],"split":bundle["source"]["evaluation_split"],"dimension":dim,"reduction":"native" if dim==width else "pca","metric":metric,"score":float(score),"seed":plan["seed"],"protocol":plan["protocol"]["id"],"n_eval":n_eval})
+    meta={"schema_version":2,"plan":plan,"bundle_hash":fingerprint(bundle),"source":bundle["source"],"calibration_hash":calibration["manifest_hash"],"calibration_count":len(calibration["texts"]),"pca":{"components":plan["pca_components"],"pre_normalize":True,"whiten":False,"solver":"randomized"}}
+    return rows,{"by_dimension":predictions},meta,pca
 
-
-def write_metrics(path, rows):
-    with Path(path).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def save_task_outputs(output, rows, predictions, metadata, pca):
-    output = Path(output)
-    if output.exists() and any(output.iterdir()):
-        raise ValueError("Output directory is not empty; choose a fresh directory.")
-    output.mkdir(parents=True, exist_ok=True)
-    write_metrics(output / "metrics.csv", rows)
-    (output / "results.json").write_text(json.dumps({"metadata": metadata, "scores": rows}, indent=2, allow_nan=False), encoding="utf-8")
-    (output / "predictions.json").write_text(json.dumps(predictions, indent=2, allow_nan=False), encoding="utf-8")
-    if pca is not None:
-        np.savez(output / "pca.npz", mean=pca.mean_, components=pca.components_,
-                 explained_variance_ratio=pca.explained_variance_ratio_)
-
-
+def write_metrics(path,rows):
+    with Path(path).open("w",newline="",encoding="utf-8") as h:
+        w=csv.DictWriter(h,fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+def save_task_outputs(output,rows,predictions,metadata,pca):
+    output=Path(output); output.mkdir(parents=True,exist_ok=True); write_metrics(output/"metrics.csv",rows)
+    (output/"results.json").write_text(json.dumps({"metadata":metadata,"scores":rows},indent=2,allow_nan=False),encoding="utf-8")
+    (output/"predictions.json").write_text(json.dumps(predictions,indent=2,allow_nan=False),encoding="utf-8")
+    if pca is not None: np.savez(output/"pca.npz",mean=pca.mean_,components=pca.components_,explained_variance_ratio=pca.explained_variance_ratio_)
 def sts_metrics(result):
-    """Adapt a newly executed legacy result without changing its original schema."""
-    return [{"model": "Phi4-mini", "task": "STSB", "dataset": r["dataset"],
-             "dataset_revision": result["metadata"]["dataset_revision"], "split": r["split"],
-             "dimension": r["dimension"], "reduction": r["reduction"], "metric": r["metric"],
-             "score": r["cosine_spearman"], "seed": r["seed"], "protocol": "sts-validation-pilot-v1",
-             "n_eval": r["pairs"]} for r in result["scores"]]
+    return [{"model":"Phi4-mini","task":"STSB","dataset":r["dataset"],"dataset_revision":result["metadata"]["dataset_revision"],"split":r["split"],"dimension":r["dimension"],"reduction":r["reduction"],"metric":r["metric"],"score":r["cosine_spearman"],"seed":r["seed"],"protocol":"sts-validation-pilot-v1","n_eval":r["pairs"]} for r in result["scores"]]
