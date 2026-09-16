@@ -43,7 +43,7 @@ models, a full benchmark sweep, and the final PDF report remain future work.
   smaller widths take prefixes of the ordered PCA basis. Normalize projected vectors.
   The native baseline is normalized without centering. PCA changes centering as well
   as width and does not reduce backbone VRAM or encoding cost.
-- For new tasks, sample 2,000 reference/train rows deterministically for PCA; train
+- For Banking77/arXiv, sample 2,000 reference/train rows deterministically for PCA; train
   the classifier or clusterer on the entire designated fit partition. Banking77 PCA
   samples distinct training texts, while its classifier retains all 10,003 train rows. PCA requires
   more rows than components and sufficient effective rank (checked at runtime).
@@ -70,8 +70,9 @@ must have a positive judgment. Ties use ascending document ID. Query IDs, corpus
 IDs and qrels remain separate; query/corpus fitting is forbidden. Corpus text is
 `title + "\n" + abstract`; queries remain claim text. Evaluation uses the supplied
 corpus; do not silently restrict it to relevant documents. Results from corpus
-subsets must be labelled as subsets. Independent PCA reference data is unresolved:
-SciFact's small training query set alone cannot supply 2,000 calibration sentences.
+subsets must be labelled as subsets. SciFact PCA uses all eligible unique `claim` texts from `allenai/scifact`, config
+`claims`, train + validation only. The 1,711 source rows may contain repeats and MTEB
+test-query overlaps; these are excluded and counted. No 2,000-row quota applies.
 
 **Classification:** verified dataset `PolyAI/banking77`, fields `text` and `label`,
 77 intents, official train (10,003 rows) for all fitting and official test (3,080 rows)
@@ -94,8 +95,9 @@ subset per invocation; multi-subset aggregation is future work.
 The project does not use the MTEB runner. It preserves the working STSB data/metric,
 uses standard task metrics, and records explicit custom protocols. See
 [task bundle specification](docs/task_data.md) for the required data contract and
-remaining source verification. SciFact/arXiv Hugging Face IDs remain unset. Banking77 has a dedicated
-data-only preparation command; it discovers the configuration and pins the resolved
+remaining source verification. SciFact uses verified `mteb/scifact`; its official test export and separate AllenAI claim
+reference are documented in the bundle specification. ArXiv IDs remain unset.
+Banking77 has a dedicated data-only preparation command; it discovers the configuration and pins the resolved
 dataset commit before loading. No configuration is guessed.
 
 ## Required experiment matrix
@@ -196,6 +198,40 @@ or validation splits. Classifier settings and data remain identical across dimen
 Accuracy is primary; macro-F1 is secondary. The default 2,000-row PCA calibration
 sample is entirely training-derived. No test data fit PCA or classifier parameters.
 
+## SciFact data preparation (no model execution)
+
+Retrieval stays `mteb/scifact` official test: 5,183 documents, 300 test queries,
+339 judgments; existing nDCG@10/Recall@10/Recall@100/MRR@10 metrics are unchanged.
+PCA uses `allenai/scifact`, config `claims`, **train + validation only**, reading
+`claim` texts. Both dataset revisions and their provenance are recorded separately.
+AllenAI test is never requested or iterated.
+
+```python
+!python prepare_scifact.py --dry-run
+!python prepare_scifact.py --output data/scifact_allenai_reference.json
+!python run_experiment.py --task SciFact --data data/scifact_allenai_reference.json --dimensions 3072 1536 768 384 --dry-run
+```
+
+The 1,261 + 450 source rows do not guarantee 1,711 unique eligible claims:
+[AllenAI's loader](https://huggingface.co/datasets/allenai/scifact/blob/main/scifact.py)
+repeats claims across evidence annotations. Preparation deduplicates texts and
+excludes canonical matches to MTEB test queries and corpus documents, recording
+all exclusions. Every remaining eligible claim is used for PCA in source order;
+`--train-sentences` does not subsample SciFact. No test qrels fit any component.
+
+The full-dimension dry-run passes the sample-count check only with **at least
+1,537 eligible texts**, because centered 1,536-component PCA needs rank 1,536.
+Numerical rank is checked later during PCA fitting. The code does not claim that
+the real source satisfies this condition before preparation. It does not add
+corpus/test texts or repeat rows to reach the required count.
+
+Only preparation downloads dataset data/code. The AllenAI loading script is resolved
+to a commit and explicitly trusted; streaming iterates train and validation only.
+Use the current script-compatible datasets environment. Its upstream archive is
+mutable, so retain the exact exported bundle and recorded input hashes as well as
+both revisions. See the bundle specification for details. Real preparation and
+SciFact experiments remain **unexecuted**.
+
 ## Execution interface and compatibility
 
 `run_pilot.py` is unchanged: its default remains 3072/768/384 and its original
@@ -245,13 +281,14 @@ Pinned existing revisions:
 - `pilot/task_config.py`: task protocols and readiness checks.
 - `pilot/task_data.py`: local bundle loading, provenance and leakage validation.
 - `pilot/banking77.py`, `prepare_banking77.py`: official Banking77 contract and data-only export.
+- `pilot/scifact.py`, `prepare_scifact.py`: official SciFact retrieval export and AllenAI non-test claim reference.
 - `pilot/task_runner.py`: shared native extraction -> training-only PCA -> task evaluation -> common exports.
 - `pilot/evaluation.py`: retrieval, classifier and inductive clustering evaluators.
 - `pilot/core.py`, `pilot/model.py`: unchanged verified PCA/cache/extraction utilities.
 - `tests/`: existing regressions plus synthetic task/data/runner tests.
 
 Later model adapters can supply native vectors to the shared engine, after checkpoint,
-representation and memory validation. SciFact/arXiv dataset exporters, MTEB integration, additional
+representation and memory validation. Real SciFact reference eligibility/rank validation, the arXiv dataset exporter, MTEB integration, additional
 model loaders, multi-subset arXiv aggregation, actual new-task runs and the report
 remain outside this step.
 

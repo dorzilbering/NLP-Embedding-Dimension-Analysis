@@ -46,7 +46,7 @@ def bundle(task="Banking77"):
 @pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
 def test_bundle_and_native_plan(task):
     data = bundle(task)
-    if task == "Banking77":
+    if task in ("Banking77", "SciFact"):
         with pytest.raises(ValueError, match="full official"):
             task_plan(task, dimensions=[3072], bundle=data)
         return
@@ -58,7 +58,7 @@ def test_bundle_and_native_plan(task):
 @pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
 def test_missing_data_blocks_and_pca_count(task):
     assert not task_plan(task)["executable"]
-    with pytest.raises(ValueError, match="full official" if task == "Banking77" else "Not enough"):
+    with pytest.raises(ValueError, match="full official" if task in ("Banking77", "SciFact") else "Not enough"):
         task_plan(task, bundle=bundle(task), clusters=2 if task == "Arxiv-Clustering" else None)
 
 
@@ -203,7 +203,7 @@ def test_complete_synthetic_pipeline_train_only_pca_and_exports(task, tmp_path, 
     monkeypatch.setattr(runner, "fit_pca", fit)
     rows, pred, metadata, pca = evaluate_bundle(data, plan, encode)
     assert len(calls) == len(groups) and len(fitted) == 1
-    selected = np.random.default_rng(42).permutation(20)[:10]
+    selected = range(20) if task == "SciFact" else np.random.default_rng(42).permutation(20)[:10]
     np.testing.assert_array_equal(fitted[0], np.asarray([mapping[groups[0][i]["text"]] for i in selected]))
     assert pca.components_.shape == (4, 12)
     assert len(rows) == 3 * len(PROTOCOLS[task]["metrics"])
@@ -288,7 +288,7 @@ def test_dry_run_with_local_bundle(task, tmp_path, capsys):
     argv = ["--task", task, "--data", str(path), "--dimensions", "3072", "--dry-run"]
     if task == "Arxiv-Clustering":
         argv.extend(["--clusters", "2"])
-    if task == "Banking77":
+    if task in ("Banking77", "SciFact"):
         with pytest.raises(ValueError, match="full official"):
             run_experiment.main(argv)
         return

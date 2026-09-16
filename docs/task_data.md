@@ -2,8 +2,9 @@
 
 The new runner reads UTF-8 JSON via `--data`; it does not fetch new-task datasets.
 This separates verified dataset preparation from model execution. Banking77 has a dedicated data-only exporter (`prepare_banking77.py`) for the
-verified `PolyAI/banking77` official train/test protocol. SciFact/arXiv
-exporters remain unimplemented because their source choices are unresolved. Once a reviewed bundle is
+verified `PolyAI/banking77` official train/test protocol. SciFact now has `prepare_scifact.py` for official test retrieval and separate AllenAI claims
+reference data. The arXiv exporter remains unimplemented because its source choices
+are unresolved. Once a reviewed bundle is
 provided, the Phi extraction and downstream pipeline are executable.
 
 ## Required provenance
@@ -23,8 +24,10 @@ has none. `selection` is `full` or `subset`; `evaluation_split` is `validation`,
 any deduplication/exclusions and deterministic selection (including seed).
 
 `fit_source.role` is `train`, `external_reference`, or `derived_reference`.
-Training role requires `split: train`. No fitting split may be labelled validation,
-test, evaluation or heldout. A derived reference is allowed only for an explicitly
+Training role requires `split: train`. No fitting split may be labelled test, evaluation or heldout. The explicit
+SciFact exception uses AllenAI train+validation as a separate reference source,
+with MTEB test-query text matches excluded; AllenAI validation is not the retrieval
+evaluation split. Other task fitting policies are unchanged. A derived reference is allowed only for an explicitly
 custom arXiv reference/heldout protocol (`split: reference`, evaluation `heldout`).
 It must come from a non-evaluation source pool; **never divide an official benchmark
 test set into training and testing and call that the official benchmark**. Prefer
@@ -107,30 +110,97 @@ execution have **not** been performed in this update.
 
 ## SciFact
 
-Collections: `reference`, `queries`, `corpus`, and mapping `qrels`.
+Verified source: `mteb/scifact`. Evaluation is **official test only**. Primary metric
+is nDCG@10; secondary metrics remain Recall@10, Recall@100 and MRR@10, with the existing
+exact cosine ranking, linear relevance gain and deterministic document-ID tie-break.
+No real SciFact preparation or model experiment has been executed here.
 
-- `reference`: fitting-only `{id, text}` rows from a documented independent pool
-  or eligible official training source; never evaluation claims/corpus documents.
-- `queries`: evaluation claims as `{id, text}`.
-- `corpus`: all benchmark candidate documents as `{id, text}`, with
-  `text = title + "\n" + abstract`. If the source abstract is a sentence list, join
-  sentences with a single space and record this in provenance. Set
-  `source.text_format: title_newline_abstract`.
-- `qrels`: `{query_id: {document_id: relevance_grade}}`, using the original judgments.
-  Cover exactly the selected evaluation query IDs. Every judged document must exist
-  in the supplied corpus, and each selected query must have a positive judgment.
-  Unjudged documents are not removed. Preserve query/corpus ID namespaces separately.
+The [official dataset metadata](https://huggingface.co/datasets/mteb/scifact/blob/main/README.md)
+defines these configurations (all loaded at the **same resolved immutable commit**):
 
-PCA fits only `reference`, and the same frozen transform is applied to both query
-and corpus vectors. There is no trained retriever. Query-by-query exact scoring
-avoids allocating a full query/corpus similarity matrix. Rankings save top 100.
+| Configuration | Physical split | Schema | Rows |
+|---|---|---|---:|
+| corpus | corpus | `_id`, `title`, `text` | 5,183 |
+| queries | queries | `_id`, `text` | 1,109 |
+| default | train | `query-id`, `corpus-id`, `score` | 919 judgments / 809 queries |
+| default | test | `query-id`, `corpus-id`, `score` | 339 judgments / 300 queries |
 
-Outstanding: verify source/revision, evaluation query split and complete corpus/qrels
-mapping; choose and document an independent calibration pool with >=2,000 eligible
-sentences for the default PCA run. Small SciFact training query counts cannot meet
-that requirement by themselves. Corpus-derived PCA would violate this project's
-current fitting constraint. External calibration introduces domain effects that
-must later be reported as a limitation.
+The query table combines train and test texts. Physical split name `queries` does
+**not** imply training permission: logical membership comes from the corresponding
+qrels split. Preparation rejects overlapping train/test query IDs, unknown IDs,
+duplicate IDs/judgment pairs, incomplete query membership, invalid relevance grades,
+unexpected counts/configurations/splits, or queries without positive judgments.
+
+### Export and exact reference source
+
+Retrieval remains unchanged: all 5,183 corpus documents (`title + "\n" + text`),
+300 official test queries, and 339 test qrels. Query/corpus IDs and judgments are
+preserved. Metrics remain nDCG@10, Recall@10/100, and MRR@10.
+
+PCA reference now comes **only** from `allenai/scifact`, configuration `claims`:
+
+- `train`: 1,261 input rows.
+- `validation`: 450 input rows.
+- Read only the `claim` text field; evidence labels and annotations are not features.
+- Never request or iterate the AllenAI `test` split.
+- Process train then validation in source order. Exclude canonical text matches to
+  MTEB test queries and the retrieval corpus, then keep the first occurrence of each
+  remaining canonical text. Record every exclusion with its row ID, reason and hash.
+- Use **all remaining eligible texts** for PCA. SciFact no longer uses a 2,000-row
+  quota or random reference subsampling; `--train-sentences` is ignored for SciFact.
+  Banking77/STSB and arXiv retain their existing sampling policies.
+
+**1,711 input rows are not a guarantee of 1,711 distinct eligible texts.** The
+[official AllenAI loader](https://huggingface.co/datasets/allenai/scifact/blob/main/scifact.py)
+repeats claims for evidence annotations. Cross-dataset split names alone also do
+not establish separation from MTEB test queries. The exporter measures and reports
+actual eligibility instead of claiming that 1,536-component PCA is automatically
+valid. Test qrels provide evaluation membership/scoring only; their relevance
+grades and relevant-document choices never affect PCA fitting.
+
+PCA keeps the existing centered, non-whitened randomized solver. It requires at
+least the requested number of components **and sufficient rank**. Because centering
+limits rank to `n - 1`, this implementation requires **more than 1,536 eligible
+texts** for a nondegenerate 1,536-component fit, then checks numerical rank at
+execution. Exactly 1,536 rows cannot yield 1,536 nonzero centered components.
+If all 1,711 rows are eligible and independent, the count check passes and all are
+used. If exclusions/deduplication leave too few rows, full-matrix validation fails;
+there is no test-data, corpus, duplicate-padding or smaller-dimension fallback.
+
+`fit_source` separately records AllenAI dataset ID, resolved commit SHA, `claims`
+configuration, explicit `[train, validation]` splits, `claim` field, raw split
+counts, input text hashes, exclusions, eligible count and all-eligible policy.
+The MTEB revision/configuration/official counts remain separate in `source`.
+Existing bundle hashes and actual PCA-fit ID/hash metadata are retained.
+
+### Preparation and offline validation
+
+```bash
+python prepare_scifact.py --dry-run
+python prepare_scifact.py --output data/scifact_allenai_reference.json
+python run_experiment.py --task SciFact --data data/scifact_allenai_reference.json --dimensions 3072 1536 768 384 --dry-run
+```
+
+Only preparation accesses Hugging Face for dataset data/code. It resolves both
+`--revision` (MTEB) and `--reference-revision` (AllenAI) to separate immutable SHAs.
+The current AllenAI source uses a Python dataset loader; preparation explicitly
+uses that pinned official loader with `trust_remote_code=True` and streaming,
+iterating only train and validation. It neither requests nor iterates AllenAI test
+examples. The upstream archive can contain other splits, but they are not used.
+Use the existing script-compatible `datasets==3.6.0` environment; newer versions
+that remove dataset-script support may require a reviewed loader migration.
+No dependency changes are made automatically.
+
+The AllenAI script points to a mutable upstream archive: a dataset-script commit
+alone does not pin its bytes. Input-text hashes record the actual loaded calibration
+content; archive the exact exported bundle for reproducibility. To repeat preparation,
+pass both recorded revisions and use a fresh output path, then compare content hashes.
+The script never imports a language model or overwrites an existing export.
+
+Real preparation has not been executed. Remaining checks are source-loader
+compatibility, actual post-exclusion reference count, and eventual embedding rank.
+If fewer than 1,537 texts remain, this source cannot support the full Phi dimension
+matrix and a separately approved strategy will be required.
 
 ## Arxiv-Clustering
 
@@ -162,7 +232,7 @@ After preparing reviewed bundles, validate without model imports or network acce
 
 ```bash
 python run_experiment.py --task Banking77 --data data/banking77_official.json --dry-run
-python run_experiment.py --task SciFact --data data/scifact.json --dry-run
+python run_experiment.py --task SciFact --data data/scifact_allenai_reference.json --dry-run
 ```
 
 For arXiv, additionally supply `--clusters` with the verified integer K. Until that

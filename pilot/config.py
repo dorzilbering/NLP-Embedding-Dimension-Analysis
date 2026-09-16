@@ -9,7 +9,7 @@ MODEL_SPECS = {
     "Mistral-7B": {"native_dimension": 4096, "dimensions": (4096, 2048, 1024, 512), "model_id": None},
 }
 TASK_SPECS = {
-    "SciFact": {"type": "retrieval", "dataset_id": None, "status": "local-bundle retrieval implemented; dataset revision/reference source unverified"},
+    "SciFact": {"type": "retrieval", "dataset_id": "mteb/scifact", "status": "official test evaluation; AllenAI claims train+validation reference, eligible count/rank must be verified"},
     "Banking77": {"type": "classification", "dataset_id": "PolyAI/banking77", "status": "official train/test protocol verified; preparation resolves immutable revision"},
     "Arxiv-Clustering": {"type": "clustering", "dataset_id": None, "status": "inductive clustering implemented; S2S/P2P, revision and reference source unresolved"},
     "STSB": {"type": "sts", "dataset_id": "mteb/stsbenchmark-sts", "status": "English validation pilot implemented"},

@@ -21,7 +21,8 @@ def main(argv=None):
     parser.add_argument("--dimensions", nargs="+", type=int)
     parser.add_argument("--data", type=Path, help="Reviewed local JSON bundle; new tasks only.")
     parser.add_argument("--clusters", type=int, help="Predefined/training-only K; Arxiv-Clustering only.")
-    parser.add_argument("--train-sentences", type=int, default=2000)
+    parser.add_argument("--train-sentences", type=int, default=2000,
+                        help="Calibration count for other tasks; SciFact always uses all eligible reference texts.")
     parser.add_argument("--validation-pairs", type=int, default=300, help="STSB only.")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--max-length", type=int, default=256)

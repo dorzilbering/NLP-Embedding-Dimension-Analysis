@@ -23,7 +23,7 @@ def evaluate_bundle(bundle, plan, encode):
         groups["evaluation"] = bundle["evaluation"]
     vectors = {name: checked(encode([r["text"] for r in records]), len(records), width)
                for name, records in groups.items()}
-    count = plan["pca_train_sentences"]
+    count = len(fit_rows) if task == "SciFact" else plan["pca_train_sentences"]
     candidates = list(range(len(fit_rows)))
     if task == "Banking77":
         first_by_text = {}
@@ -32,7 +32,8 @@ def evaluate_bundle(bundle, plan, encode):
         candidates = list(first_by_text.values())
     if plan["pca_components"] and count > len(candidates):
         raise ValueError("Insufficient fitting rows for PCA.")
-    indices = np.random.default_rng(seed).permutation(candidates)[:count] if plan["pca_components"] else []
+    indices = ((candidates if task == "SciFact" else np.random.default_rng(seed).permutation(candidates)[:count])
+               if plan["pca_components"] else [])
     pca = fit_pca(vectors["fit"][indices], plan["pca_components"], seed) if len(indices) else None
     rows, predictions = [], {}
     for dimension in plan["dimensions"]:

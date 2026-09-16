@@ -5,6 +5,8 @@ from pilot.task_data import fingerprint, validate_bundle
 PROTOCOLS = {
     "STSB": {"id": "sts-validation-pilot-v1", "metrics": ["cosine_spearman"]},
     "SciFact": {"id": "exact-cosine-linear-ndcg-v1", "metrics": ["ndcg_at_10", "recall_at_10", "recall_at_100", "mrr_at_10"],
+                "dataset_id": "mteb/scifact", "evaluation_split": "test",
+                "pca_reference": "allenai/scifact claims train+validation; all eligible unique texts",
                 "ranking": "exact cosine; descending score then ascending document ID", "gain": "linear relevance"},
     "Banking77": {"id": "banking77-official-train-test-logistic-v1", "metrics": ["accuracy", "macro_f1"],
                   "dataset_id": "PolyAI/banking77", "fit_split": "train", "evaluation_split": "test",
@@ -25,8 +27,11 @@ def task_plan(task, model="Phi4-mini", dimensions=None, train_count=2000, seed=4
     if set(dims) - set(spec["dimensions"]):
         raise ValueError("Only assignment-required dimensions are supported.")
     components = max((d for d in dims if d < spec["native_dimension"]), default=0)
-    if type(train_count) is not int or train_count <= components or type(seed) is not int or seed < 0:
+    if (type(seed) is not int or seed < 0 or
+            (task != "SciFact" and (type(train_count) is not int or train_count <= components))):
         raise ValueError(f"Need >{components} calibration rows and a nonnegative integer seed.")
+    if task == "SciFact":
+        train_count = None  # Resolved from all eligible reference rows; never the CLI's 2000 default.
     if batch_size < 1 or not 8 <= max_length <= 512 or loading_strategy != LOADING_STRATEGY:
         raise ValueError("Invalid batch size, input length, or unsupported loading strategy.")
     if clusters is not None and (task != "Arxiv-Clustering" or type(clusters) is not int or clusters < 2):
@@ -45,9 +50,17 @@ def task_plan(task, model="Phi4-mini", dimensions=None, train_count=2000, seed=4
             if task == "Banking77":
                 from pilot.banking77 import validate_official_bundle
                 validate_official_bundle(bundle)
+            if task == "SciFact":
+                from pilot.scifact import validate_official_bundle
+                validate_official_bundle(bundle)
             fit = bundle["reference"] if task == "SciFact" else bundle["train"]
             from pilot.task_data import text_key
             eligible_count = len({text_key(r["text"]) for r in fit}) if task == "Banking77" else len(fit)
+            if task == "SciFact":
+                train_count = eligible_count
+                if components and eligible_count <= components:
+                    raise ValueError(f"SciFact has {eligible_count} eligible reference texts; centered PCA requires "
+                                     f">{components} rows plus sufficient numerical rank. No test-data fallback.")
             if components and eligible_count < train_count:
                 raise ValueError("Not enough distinct fit/reference texts for the requested PCA calibration count.")
             if clusters is not None and clusters > len(fit):
