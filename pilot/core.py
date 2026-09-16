@@ -15,10 +15,10 @@ def canonical(text):
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def select_data(dataset, train_count, eval_count, seed):
+def select_data(dataset, train_count, eval_count, seed, min_train_count=769):
     """Exclude all validation/test sentences from PCA training candidates."""
-    if train_count <= 768 or eval_count < 2:
-        raise ValueError("Need >768 calibration sentences and >=2 validation pairs.")
+    if min_train_count < 1 or train_count < min_train_count or eval_count < 2:
+        raise ValueError(f"Need >={min_train_count} calibration sentences and >=2 validation pairs.")
     held_out = {canonical(row[key]) for split in ("validation", "test")
                 for row in dataset[split] for key in ("sentence1", "sentence2")}
     unique = {}
@@ -96,20 +96,23 @@ def score_pairs(left, right, gold):
     return score, similarities
 
 
-def cached_embeddings(directory, identity, texts, encode):
+def cached_embeddings(directory, identity, texts, encode, native_dimension=3072):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    # Preserve existing Phi cache keys; distinguish future widths explicitly.
+    if native_dimension != 3072:
+        identity = {**identity, "native_dimension": native_dimension}
     key = digest({"identity": identity, "texts": texts})
     path = directory / f"{key}.npz"
     if path.exists():
         with np.load(path, allow_pickle=False) as saved:
             if str(saved["key"]) != key:
                 raise ValueError("Cache identity mismatch.")
-            array = checked(saved["embeddings"], len(texts), 3072)
+            array = checked(saved["embeddings"], len(texts), native_dimension)
             if str(saved["checksum"]) != hashlib.sha256(array.tobytes()).hexdigest():
                 raise ValueError("Cache checksum mismatch.")
         return array, True
-    array = checked(encode(texts), len(texts), 3072)
+    array = checked(encode(texts), len(texts), native_dimension)
     temporary = path.with_suffix(".tmp")
     with temporary.open("wb") as handle:
         np.savez(handle, embeddings=array, key=key,

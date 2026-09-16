@@ -8,9 +8,7 @@ import random
 import time
 from pathlib import Path
 
-import numpy as np
-from pilot.core import cached_embeddings, digest, fit_pca, normalize, project, score_pairs, select_data
-from pilot.model import MODEL_ID, PhiEncoder, check_gpu
+from pilot.config import MODEL_SPECS, TASK_SPECS, LOADING_STRATEGY, assignment_matrix, make_plan
 
 DATASET_ID = "mteb/stsbenchmark-sts"
 MODEL_REVISION = "cfbefacb99257ffa30c83adab238a50856ac3083"
@@ -32,9 +30,9 @@ def save_outputs(output, rows, metadata):
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot([r["dimension"] for r in ordered], [r["cosine_spearman"] for r in ordered], "o-")
     ax.set(xlabel="Embedding dimension", ylabel="Cosine Spearman correlation",
-           title="Phi-4-mini: English STS validation pilot", xticks=[384, 768, 3072])
+           title="Phi-4-mini: English STS validation pilot", xticks=[r["dimension"] for r in ordered])
     ax.grid(alpha=0.3)
-    fig.text(0.5, 0.01, "3072: native; 768/384: training-only PCA. Subset evaluation.", ha="center", fontsize=8)
+    fig.text(0.5, 0.01, "Native at full width; smaller widths: training-only PCA. Subset evaluation.", ha="center", fontsize=8)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     fig.savefig(output / "dimension_vs_spearman.png", dpi=160)
     plt.close(fig)
@@ -52,7 +50,30 @@ def main():
     parser.add_argument("--model-revision", default=MODEL_REVISION, help="Pinned model SHA; overrides are resolved before loading.")
     parser.add_argument("--dataset-revision", default=DATASET_REVISION, help="Pinned dataset SHA; overrides are resolved before loading.")
     parser.add_argument("--check-hardware", action="store_true", help="No downloads; report CUDA readiness and exit.")
+    parser.add_argument("--model", choices=MODEL_SPECS, default="Phi4-mini")
+    parser.add_argument("--task", choices=TASK_SPECS, default="STSB")
+    parser.add_argument("--dimensions", type=int, nargs="+", help="Defaults preserve the original 3072/768/384 pilot.")
+    parser.add_argument("--loading-strategy", default=LOADING_STRATEGY)
+    parser.add_argument("--dry-run", action="store_true", help="Validate configuration only; no imports of model libraries, downloads or GPU checks.")
+    parser.add_argument("--list-matrix", action="store_true", help="Print assignment metadata and exit offline.")
     args = parser.parse_args()
+    if args.list_matrix:
+        print(json.dumps(assignment_matrix(), indent=2))
+        return
+    plan = make_plan(args.model, args.task, args.dimensions, args.train_sentences,
+                     args.validation_pairs, args.batch_size, args.max_length, args.loading_strategy)
+    if args.dry_run:
+        print(json.dumps({**plan, "model_revision": args.model_revision if args.model == "Phi4-mini" else None,
+                          "dataset_revision": args.dataset_revision if args.task == "STSB" else None,
+                          "seed": args.seed}, indent=2))
+        return
+    if not plan["executable"]:
+        parser.error("Execution unavailable: " + " ".join(plan["blockers"]))
+    import numpy as np
+    from pilot.core import cached_embeddings, digest, fit_pca, normalize, project, score_pairs, select_data
+    from pilot.model import MODEL_ID, PhiEncoder, check_gpu
+    dimensions = plan["dimensions"]
+    native_dimension = plan["native_dimension"]
     hardware = check_gpu()  # Before any network access or dataset/model download.
     print(json.dumps(hardware, indent=2), flush=True)
     if args.check_hardware:
@@ -77,7 +98,8 @@ def main():
     for split in ("train", "validation", "test"):
         if split not in dataset or not {"sentence1", "sentence2", "score"}.issubset(dataset[split].column_names):
             raise ValueError(f"Unexpected English STS schema for {split}.")
-    train, pairs, indices = select_data(dataset, args.train_sentences, args.validation_pairs, args.seed)
+    train, pairs, indices = select_data(dataset, args.train_sentences, args.validation_pairs, args.seed,
+                                       min_train_count=plan["pca_components"] + 1)
     texts = list(dict.fromkeys([p[key] for p in pairs for key in ("sentence1", "sentence2")]))
     lookup = {text: i for i, text in enumerate(texts)}
     print(f"Data validated: {len(train)} PCA sentences, {len(pairs)} validation pairs. Loading frozen Phi.", flush=True)
@@ -100,18 +122,18 @@ def main():
     torch.cuda.synchronize()
     encoding_seconds = time.perf_counter() - encoding
     fitting = time.perf_counter()
-    pca = fit_pca(train_x, max_dim=768, seed=args.seed)
+    pca = fit_pca(train_x, max_dim=plan["pca_components"], seed=args.seed) if plan["pca_components"] else None
     pca_seconds = time.perf_counter() - fitting
     left_ids = [lookup[p["sentence1"]] for p in pairs]
     right_ids = [lookup[p["sentence2"]] for p in pairs]
     gold = [p["score"] for p in pairs]
     rows, predictions = [], {}
-    for dimension in (3072, 768, 384):
-        transformed = normalize(eval_x) if dimension == 3072 else project(eval_x, pca, dimension)
+    for dimension in dimensions:
+        transformed = normalize(eval_x) if dimension == native_dimension else project(eval_x, pca, dimension)
         score, similarities = score_pairs(transformed[left_ids], transformed[right_ids], gold)
         rows.append({"model": MODEL_ID, "dataset": DATASET_ID, "split": "validation",
                      "pairs": len(pairs), "dimension": dimension,
-                     "reduction": "native" if dimension == 3072 else "pca",
+                     "reduction": "native" if dimension == native_dimension else "pca",
                      "metric": "cosine_spearman", "cosine_spearman": score, "seed": args.seed})
         predictions[str(dimension)] = similarities.tolist()
         print(f"dimension={dimension}, cosine_spearman={score:.6f}", flush=True)
@@ -119,7 +141,7 @@ def main():
     for name, collection in (("calibration", train), ("validation_unique", texts)):
         lengths = [len(ids) for ids in encoder.tokenizer(collection, truncation=False)["input_ids"]]
         truncation[name] = {"texts": len(lengths), "truncated": sum(n > args.max_length for n in lengths)}
-    metadata = {"schema_version": 1, "model_revision": model_revision, "dataset_revision": dataset_revision,
+    metadata = {"schema_version": 2, "experiment_plan": plan, "model_revision": model_revision, "dataset_revision": dataset_revision,
                 "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                 "representation": identity, "hardware": hardware, "python": platform.python_version(),
                 "platform": platform.platform(), "packages": packages, "batching_checks": batching_checks,
@@ -127,7 +149,8 @@ def main():
                 "validation_indices": indices, "validation_text_hash": digest(texts),
                 "leakage_check": "NFKC/casefold/whitespace normalized exclusion against ALL validation/test sentences",
                 "pca": {"fit_split": "train", "whiten": False, "pre_normalize": True,
-                        "components": 768, "explained_variance_ratio_sum": float(pca.explained_variance_ratio_.sum())},
+                        "components": plan["pca_components"],
+                        "explained_variance_ratio_sum": float(pca.explained_variance_ratio_.sum()) if pca is not None else None},
                 "native_centered": False, "score_scale": "correlation [-1, 1]",
                 "protocol": "MTEB English STS data and cosine-Spearman metric; custom validation subset, not full MTEB run",
                 "cache_hits": {"train": train_hit, "validation": eval_hit}, "truncation": truncation,
@@ -135,8 +158,9 @@ def main():
                             "pca_fit": pca_seconds, "total_before_export": time.perf_counter()-started},
                 "peak_allocated_vram_bytes": torch.cuda.max_memory_allocated()}
     save_outputs(args.output, rows, metadata)
-    np.savez(args.output / "pca.npz", mean=pca.mean_, components=pca.components_,
-             explained_variance_ratio=pca.explained_variance_ratio_)
+    if pca is not None:
+        np.savez(args.output / "pca.npz", mean=pca.mean_, components=pca.components_,
+                 explained_variance_ratio=pca.explained_variance_ratio_)
     (args.output / "predictions.json").write_text(json.dumps({"validation_indices": indices, "gold": gold,
                                                               "cosine_similarities": predictions}, indent=2))
     print(f"Saved pilot outputs to {args.output.resolve()}")

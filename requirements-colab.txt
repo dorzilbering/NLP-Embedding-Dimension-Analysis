@@ -1,0 +1,13 @@
+# Colab: keep the existing, verified CUDA-enabled PyTorch installation.
+# These non-torch pins match requirements.txt; the exact historical Colab
+# versions must be recovered from the original results.json/environment export.
+transformers==4.53.3
+datasets==3.6.0
+huggingface-hub==0.33.4
+accelerate==1.8.1
+safetensors==0.5.3
+numpy==2.2.6
+scipy==1.15.3
+scikit-learn==1.6.1
+matplotlib==3.10.3
+pytest==8.3.5
