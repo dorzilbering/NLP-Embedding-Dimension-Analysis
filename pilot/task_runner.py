@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from pilot.core import checked, fit_pca, normalize, project
-from pilot.evaluation import classification, clustering, retrieval
+from pilot.evaluation import classification, retrieval
 from pilot.task_data import fingerprint, text_key, validate_bundle
 
 
@@ -14,6 +14,9 @@ def evaluate_bundle(bundle, plan, encode):
     """Fit on reference/train only; reuse a single PCA basis across dimensions."""
     task = plan["task"]
     validate_bundle(bundle, task)
+    if task == "Arxiv-Clustering":
+        from pilot.arxiv import evaluate_arxiv
+        return evaluate_arxiv(bundle, plan, encode)
     fit_rows = bundle["reference"] if task == "SciFact" else bundle["train"]
     width, seed = plan["native_dimension"], plan["seed"]
     groups = {"fit": fit_rows}
@@ -48,9 +51,7 @@ def evaluate_bundle(bundle, plan, encode):
             scores, pred = classification(transformed["fit"], [r["label"] for r in fit_rows],
                                           transformed["evaluation"], [r["label"] for r in evaluation_rows], seed)
         else:
-            evaluation_rows = bundle["evaluation"]
-            scores, pred = clustering(transformed["fit"], transformed["evaluation"],
-                                      [r["label"] for r in evaluation_rows], plan["clusters"], seed)
+            raise ValueError("Unknown task evaluator.")
         predictions[str(dimension)] = pred
         for metric, score in scores.items():
             if not np.isfinite(score):

@@ -11,7 +11,7 @@ import pytest
 
 from pilot.task_config import PROTOCOLS, task_plan
 from pilot.task_data import load_bundle, validate_bundle
-from pilot.evaluation import classification, clustering, retrieval
+from pilot.evaluation import classification, retrieval
 from pilot.task_runner import evaluate_bundle, save_task_outputs, sts_metrics
 
 
@@ -43,7 +43,7 @@ def bundle(task="Banking77"):
     return data
 
 
-@pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
+@pytest.mark.parametrize("task", ["SciFact", "Banking77"])
 def test_bundle_and_native_plan(task):
     data = bundle(task)
     if task in ("Banking77", "SciFact"):
@@ -55,14 +55,14 @@ def test_bundle_and_native_plan(task):
     assert plan["data"]["evaluation_count"] == 4
 
 
-@pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
+@pytest.mark.parametrize("task", ["SciFact", "Banking77"])
 def test_missing_data_blocks_and_pca_count(task):
     assert not task_plan(task)["executable"]
     with pytest.raises(ValueError, match="full official" if task in ("Banking77", "SciFact") else "Not enough"):
         task_plan(task, bundle=bundle(task), clusters=2 if task == "Arxiv-Clustering" else None)
 
 
-@pytest.mark.parametrize("task,target", [("Banking77", "evaluation"), ("Arxiv-Clustering", "evaluation"),
+@pytest.mark.parametrize("task,target", [("Banking77", "evaluation"),
                                          ("SciFact", "queries"), ("SciFact", "corpus")])
 def test_canonical_overlap_rejected(task, target):
     data = bundle(task)
@@ -117,7 +117,8 @@ def test_missing_qrels_and_variant():
     del data["source"]["variant"]
     with pytest.raises(ValueError):
         validate_bundle(data, "Arxiv-Clustering")
-    assert not task_plan("Arxiv-Clustering", dimensions=[3072], bundle=bundle("Arxiv-Clustering"))["executable"]
+    with pytest.raises(ValueError):
+        task_plan("Arxiv-Clustering", dimensions=[3072], bundle=bundle("Arxiv-Clustering"))
 
 
 def test_duplicate_json_keys(tmp_path):
@@ -145,24 +146,6 @@ def test_classification_train_only_and_deterministic(monkeypatch):
     assert all(p["C"] == 1. and p["solver"] == "lbfgs" for _, _, p in observed)
 
 
-def test_clustering_fit_reference_only(monkeypatch):
-    from sklearn.cluster import MiniBatchKMeans
-    original = MiniBatchKMeans.fit
-    fitted = []
-    def spy(self, x, *args, **kwargs):
-        fitted.append(x.copy())
-        return original(self, x, *args, **kwargs)
-    monkeypatch.setattr(MiniBatchKMeans, "fit", spy)
-    train = np.array([[1, .01], [1, -.01], [-1, .01], [-1, -.01]])
-    test = np.array([[1, 0], [-1, 0]])
-    scores, pred = clustering(train, test, ["a", "b"], 2, 42)
-    scores2, pred2 = clustering(train, test, ["renamed-a", "renamed-b"], 2, 42)
-    assert scores == scores2 == {"v_measure": 1., "adjusted_rand": 1., "nmi": 1.}
-    assert pred == pred2 and all(x.shape == (4, 2) for x in fitted)
-    with pytest.raises(ValueError):
-        clustering(train, test, ["a", "b"], 5, 42)
-
-
 def test_retrieval_known_ranking_and_linear_ndcg():
     scores, rankings = retrieval([[1, 0]], ["q"], [[.8, .6], [1, 0], [0, 1]],
                                  ["relevant", "irrelevant", "third"], {"q": {"relevant": 2, "third": 1}})
@@ -182,7 +165,7 @@ def test_retrieval_ties_cutoffs_and_no_positive():
         retrieval([[1, 0]], ["q"], [[1, 0]], ["d"], {"q": {"d": 0}})
 
 
-@pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
+@pytest.mark.parametrize("task", ["SciFact", "Banking77"])
 def test_complete_synthetic_pipeline_train_only_pca_and_exports(task, tmp_path, monkeypatch):
     import pilot.task_runner as runner
     data = bundle(task)
@@ -280,7 +263,7 @@ def test_unresolved_revision_rejected(revision):
         validate_bundle(data, "Banking77")
 
 
-@pytest.mark.parametrize("task", ["SciFact", "Banking77", "Arxiv-Clustering"])
+@pytest.mark.parametrize("task", ["SciFact", "Banking77"])
 def test_dry_run_with_local_bundle(task, tmp_path, capsys):
     import run_experiment
     path = tmp_path / "fixture.json"

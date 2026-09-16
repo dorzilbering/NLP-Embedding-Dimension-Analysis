@@ -42,6 +42,9 @@ def _no_overlap(fit, evaluation, allow_training_duplicates=False):
 
 
 def validate_bundle(bundle, task):
+    if task == "Arxiv-Clustering":
+        from pilot.arxiv import validate_arxiv_bundle
+        return validate_arxiv_bundle(bundle)
     if not isinstance(bundle, dict) or task not in NEW_TASKS or bundle.get("schema_version") != 1 or bundle.get("task") != task:
         raise ValueError("Task data bundle has an unexpected schema/task.")
     source, fit_source = bundle.get("source"), bundle.get("fit_source")
@@ -61,16 +64,12 @@ def validate_bundle(bundle, task):
     if fit_source["role"] == "train" and fit_source["split"] != "train":
         raise ValueError("Training role must use the designated train split.")
     if fit_source["role"] == "derived_reference":
-        if task != "Arxiv-Clustering" or source["evaluation_split"] != "heldout" or fit_source["split"] != "reference":
-            raise ValueError("Derived reference is only valid for an explicit arXiv reference/heldout protocol.")
+        raise ValueError("Derived reference partitions are unsupported; Arxiv uses official clustering sets.")
     if task == "Banking77":
         if fit_source["role"] != "train" or source["evaluation_split"] != "test":
             raise ValueError("Banking77 requires the official train split and official test evaluation.")
         if any(fit_source[k] != source[k] for k in ("dataset_id", "revision", "configuration")):
             raise ValueError("Banking77 train and evaluation must share the same dataset revision/configuration.")
-    if task == "Arxiv-Clustering":
-        if source.get("variant") not in ("S2S", "P2P") or not source.get("subset_id"):
-            raise ValueError("Specify the arXiv S2S/P2P variant and subset_id; no default is assumed.")
     if task == "SciFact":
         if source["text_format"] != "title_newline_abstract":
             raise ValueError("SciFact corpus formatting must explicitly be title_newline_abstract.")

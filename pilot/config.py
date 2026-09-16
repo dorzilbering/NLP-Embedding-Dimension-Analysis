@@ -11,7 +11,7 @@ MODEL_SPECS = {
 TASK_SPECS = {
     "SciFact": {"type": "retrieval", "dataset_id": "mteb/scifact", "status": "official test evaluation; AllenAI claims train+validation reference, eligible count/rank must be verified"},
     "Banking77": {"type": "classification", "dataset_id": "PolyAI/banking77", "status": "official train/test protocol verified; preparation resolves immutable revision"},
-    "Arxiv-Clustering": {"type": "clustering", "dataset_id": None, "status": "inductive clustering implemented; S2S/P2P, revision and reference source unresolved"},
+    "Arxiv-Clustering": {"type": "clustering", "dataset_id": "mteb/arxiv-clustering-s2s", "status": "ArxivClusteringS2S per-set evaluation implemented; reduced dimensions blocked without independent PCA data"},
     "STSB": {"type": "sts", "dataset_id": "mteb/stsbenchmark-sts", "status": "English validation pilot implemented"},
 }
 LEGACY_DIMENSIONS = (3072, 768, 384)

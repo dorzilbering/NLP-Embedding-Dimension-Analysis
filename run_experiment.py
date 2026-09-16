@@ -20,7 +20,7 @@ def main(argv=None):
     parser.add_argument("--model", choices=MODEL_SPECS, default="Phi4-mini")
     parser.add_argument("--dimensions", nargs="+", type=int)
     parser.add_argument("--data", type=Path, help="Reviewed local JSON bundle; new tasks only.")
-    parser.add_argument("--clusters", type=int, help="Predefined/training-only K; Arxiv-Clustering only.")
+    parser.add_argument("--clusters", type=int, help="Deprecated: ArxivClusteringS2S uses each official set\'s class count.")
     parser.add_argument("--train-sentences", type=int, default=2000,
                         help="Calibration count for other tasks; SciFact always uses all eligible reference texts.")
     parser.add_argument("--validation-pairs", type=int, default=300, help="STSB only.")
@@ -97,7 +97,8 @@ def main(argv=None):
     metadata.update(representation=identity, hardware=hardware, packages=packages,
                     python=platform.python_version(), platform=platform.platform(), batching_checks=batching_checks,
                     cache_hits_in_group_order=cache_hits, truncation_in_group_order=truncation,
-                    group_order=["fit", "queries", "corpus"] if args.task == "SciFact" else ["fit", "evaluation"],
+                    group_order=(metadata["group_order"] if args.task == "Arxiv-Clustering" else
+                                 ["fit", "queries", "corpus"] if args.task == "SciFact" else ["fit", "evaluation"]),
                     seconds_before_export=time.perf_counter() - started,
                     peak_allocated_vram_bytes=torch.cuda.max_memory_allocated())
     save_task_outputs(output, rows, predictions, metadata, pca)

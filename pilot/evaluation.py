@@ -24,20 +24,21 @@ def classification(train_x, train_labels, eval_x, eval_labels, seed):
             "macro_f1": float(f1_score(eval_labels, predictions, labels=labels, average="macro", zero_division=0))}, predictions.tolist()
 
 
-def clustering(reference_x, eval_x, eval_labels, clusters, seed):
+def clustering(vectors, labels, seed):
+    """Standard clustering: fit/predict on one complete official set, then score."""
     from sklearn.cluster import MiniBatchKMeans
     from sklearn.metrics import v_measure_score, adjusted_rand_score, normalized_mutual_info_score
-    reference_x, eval_x = normalize(reference_x), normalize(eval_x)
-    if len(eval_labels) != len(eval_x) or reference_x.shape[1] != eval_x.shape[1]:
+    vectors = normalize(vectors)
+    if len(labels) != len(vectors):
         raise ValueError("Clustering embedding/label alignment mismatch.")
-    if clusters < 2 or len(np.unique(reference_x, axis=0)) < clusters:
-        raise ValueError("Not enough distinct reference vectors for the requested clusters.")
+    clusters = len(set(labels))  # Standard benchmark K; labels never transform vectors.
+    if clusters < 2 or len(np.unique(vectors, axis=0)) < clusters:
+        raise ValueError("Not enough distinct vectors for this set's cluster count.")
     estimator = MiniBatchKMeans(n_clusters=clusters, random_state=seed, **PROTOCOLS["Arxiv-Clustering"]["clustering"])
-    estimator.fit(reference_x)  # Never fit or fit_predict on evaluation vectors.
-    predictions = estimator.predict(eval_x)
-    return {"v_measure": float(v_measure_score(eval_labels, predictions)),
-            "adjusted_rand": float(adjusted_rand_score(eval_labels, predictions)),
-            "nmi": float(normalized_mutual_info_score(eval_labels, predictions, average_method="arithmetic"))}, predictions.tolist()
+    predictions = estimator.fit_predict(vectors)
+    return {"v_measure": float(v_measure_score(labels, predictions)),
+            "adjusted_rand": float(adjusted_rand_score(labels, predictions)),
+            "nmi": float(normalized_mutual_info_score(labels, predictions, average_method="arithmetic"))}, predictions.tolist()
 
 
 def retrieval(query_x, query_ids, corpus_x, corpus_ids, qrels):
