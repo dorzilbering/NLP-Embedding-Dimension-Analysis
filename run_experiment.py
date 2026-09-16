@@ -1,112 +1,49 @@
-"""Task-aware Phi experiments. Dry-run uses only the standard library."""
-import argparse
-import importlib.metadata
-import json
+"""Run any assignment model on any assignment task with a shared per-model PCA basis."""
+import argparse,json,random,time
 from pathlib import Path
-import platform
-import random
-import sys
-import time
-
-from pilot.config import LOADING_STRATEGY, MODEL_SPECS, TASK_SPECS
+import numpy as np
+from pilot.config import MODEL_SPECS,TASK_SPECS,LOADING_STRATEGY
 from pilot.task_config import task_plan
-from pilot.task_data import load_bundle
-from run_pilot import MODEL_REVISION
+from pilot.task_data import load_bundle,fingerprint
 
+def load_calibration(path):
+    b=json.loads(Path(path).read_text(encoding="utf-8"))
+    if b.get("role")!="shared_pca_calibration" or b.get("manifest_hash")!=fingerprint(b.get("texts",[])): raise ValueError("Invalid calibration bundle.")
+    return b
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", choices=TASK_SPECS, required=True)
-    parser.add_argument("--model", choices=MODEL_SPECS, default="Phi4-mini")
-    parser.add_argument("--dimensions", nargs="+", type=int)
-    parser.add_argument("--data", type=Path, help="Reviewed local JSON bundle; new tasks only.")
-    parser.add_argument("--clusters", type=int, help="Deprecated: ArxivClusteringS2S uses each official set\'s class count.")
-    parser.add_argument("--train-sentences", type=int, default=2000,
-                        help="Calibration count for other tasks; SciFact always uses all eligible reference texts.")
-    parser.add_argument("--validation-pairs", type=int, default=300, help="STSB only.")
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--max-length", type=int, default=256)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--loading-strategy", default=LOADING_STRATEGY)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--cache", type=Path, default=Path("cache/native"))
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args(argv)
-    if args.validation_pairs < 2 or (args.task != "STSB" and args.validation_pairs != 300):
-        parser.error("--validation-pairs is STSB-only and must be >=2.")
-    bundle = load_bundle(args.data, args.task) if args.data else None
-    plan = task_plan(args.task, args.model, args.dimensions, args.train_sentences, args.seed,
-                     args.batch_size, args.max_length, args.clusters, bundle, args.loading_strategy)
-    if args.dry_run:
-        print(json.dumps(plan, indent=2))
-        return
-    if not plan["executable"]:
-        parser.error("Execution blocked: " + " ".join(plan["blockers"]))
-    output = args.output or Path("results") / ("phi_" + args.task.lower().replace("-", "_"))
-    if output.exists() and (not output.is_dir() or any(output.iterdir())):
-        parser.error("Output directory is not empty. Choose a fresh --output directory.")
-    if args.task == "STSB":
-        import run_pilot
-        forwarded = ["run_pilot.py", "--dimensions", *map(str, plan["dimensions"]),
-                     "--train-sentences", str(args.train_sentences), "--validation-pairs", str(args.validation_pairs),
-                     "--batch-size", str(args.batch_size), "--max-length", str(args.max_length),
-                     "--seed", str(args.seed), "--output", str(output), "--cache", str(args.cache)]
-        original = sys.argv
-        try:
-            sys.argv = forwarded
-            run_pilot.main()
-        finally:
-            sys.argv = original
-        from pilot.task_runner import sts_metrics, write_metrics
-        write_metrics(output / "metrics.csv", sts_metrics(json.loads((output / "results.json").read_text(encoding="utf-8"))))
-        return
-
-    from pilot.model import PhiEncoder, MODEL_ID, check_gpu
-    hardware = check_gpu()  # Refuse CPU execution before model loading/download.
-    import numpy as np
+    p=argparse.ArgumentParser(); p.add_argument("--task",choices=TASK_SPECS,required=True); p.add_argument("--model",choices=MODEL_SPECS,required=True)
+    p.add_argument("--dimensions",nargs="+",type=int); p.add_argument("--data",type=Path); p.add_argument("--calibration",type=Path,required=True)
+    p.add_argument("--batch-size",type=int,default=4); p.add_argument("--max-length",type=int,default=256); p.add_argument("--seed",type=int,default=42)
+    p.add_argument("--output",type=Path,required=True); p.add_argument("--cache",type=Path,default=Path("cache/native")); p.add_argument("--dry-run",action="store_true")
+    a=p.parse_args(argv); calibration=load_calibration(a.calibration); bundle=load_bundle(a.data,a.task) if a.task!="STSB" and a.data else None
+    plan=task_plan(a.task,a.model,a.dimensions,None,a.seed,a.batch_size,a.max_length,None,bundle,LOADING_STRATEGY,calibration)
+    if a.dry_run: print(json.dumps(plan,indent=2)); return
+    if not plan["executable"]: p.error("Execution blocked: "+" ".join(plan["blockers"]))
+    if a.task!="STSB" and bundle is None: p.error("--data is required for this task")
+    from huggingface_hub import HfApi
+    from pilot.model import FrozenEncoder,check_gpu
+    from pilot.core import cached_embeddings,checked,normalize,project
+    from pilot.task_runner import evaluate_bundle,fit_shared_pca,save_task_outputs
     import torch
-    from pilot.core import cached_embeddings
-    from pilot.task_runner import evaluate_bundle, save_task_outputs
-    started = time.perf_counter()
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cuda.matmul.allow_tf32 = False
-    encoder = PhiEncoder(MODEL_REVISION, args.batch_size, args.max_length)
-    batching_checks = encoder.validate_batching()
-    packages = {name: importlib.metadata.version(name) for name in
-                ("torch", "transformers", "datasets", "numpy", "scipy", "scikit-learn", "matplotlib",
-                 "huggingface-hub", "accelerate", "safetensors")}
-    identity = {"schema": 1, "model": MODEL_ID, "revision": MODEL_REVISION,
-                "pooling": "final_normalized_hidden_last_attention_mask_valid_token",
-                "format": "plain_text_tokenizer_default_special_tokens_no_chat_no_added_eos",
-                "max_length": args.max_length, "dtype": str(encoder.dtype), "padding": "right",
-                "attention": "sdpa", "batch_size": args.batch_size, "packages": packages, "gpu": hardware["gpu"]}
-    cache_hits, truncation = [], []
-
-    def encode(texts):
-        vectors, hit = cached_embeddings(args.cache, identity, texts, encoder.encode)
-        cache_hits.append(hit)
-        lengths = [len(ids) for ids in encoder.tokenizer(texts, truncation=False)["input_ids"]]
-        truncation.append({"texts": len(texts), "truncated": sum(n > args.max_length for n in lengths)})
-        return vectors
-
-    rows, predictions, metadata, pca = evaluate_bundle(bundle, plan, encode)
-    torch.cuda.synchronize()
-    metadata.update(representation=identity, hardware=hardware, packages=packages,
-                    python=platform.python_version(), platform=platform.platform(), batching_checks=batching_checks,
-                    cache_hits_in_group_order=cache_hits, truncation_in_group_order=truncation,
-                    group_order=(metadata["group_order"] if args.task == "Arxiv-Clustering" else
-                                 ["fit", "queries", "corpus"] if args.task == "SciFact" else ["fit", "evaluation"]),
-                    seconds_before_export=time.perf_counter() - started,
-                    peak_allocated_vram_bytes=torch.cuda.max_memory_allocated())
-    save_task_outputs(output, rows, predictions, metadata, pca)
-    print(f"Saved results to {output.resolve()}")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except (ValueError, RuntimeError, ImportError, OSError) as error:
-        raise SystemExit(f"Experiment stopped: {error}") from error
+    random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed); torch.cuda.manual_seed_all(a.seed)
+    hardware=check_gpu(); api=HfApi(); revision=api.model_info(plan["model_id"]).sha
+    encoder=FrozenEncoder(a.model,revision,a.batch_size,a.max_length); identity={"model":plan["model_id"],"revision":revision,"width":plan["native_dimension"],"max_length":a.max_length,"quantization":plan["quantization"]}
+    def encode(texts): return cached_embeddings(a.cache,identity,texts,encoder.encode)[0]
+    started=time.perf_counter()
+    if a.task=="STSB":
+        from datasets import load_dataset
+        from scipy.stats import spearmanr
+        dsrev=api.dataset_info("mteb/stsbenchmark-sts").sha; ds=load_dataset("mteb/stsbenchmark-sts",revision=dsrev); rows0=list(ds["validation"])
+        texts=list(dict.fromkeys([r[k] for r in rows0 for k in ("sentence1","sentence2")])); lookup={t:i for i,t in enumerate(texts)}; x=checked(encode(texts),len(texts),plan["native_dimension"]); pca=fit_shared_pca(calibration,plan,encode)
+        rows=[]; preds={}
+        for dim in plan["dimensions"]:
+            z=normalize(x) if dim==plan["native_dimension"] else project(x,pca,dim); sims=np.array([float(z[lookup[r["sentence1"]]]@z[lookup[r["sentence2"]]]) for r in rows0]); score=float(spearmanr(sims,[r["score"] for r in rows0]).statistic)
+            rows.append({"model":a.model,"task":"STSB","dataset":"mteb/stsbenchmark-sts","dataset_revision":dsrev,"split":"validation","dimension":dim,"reduction":"native" if dim==plan["native_dimension"] else "pca","metric":"cosine_spearman","score":score,"seed":a.seed,"protocol":"sts-full-validation-v2","n_eval":len(rows0)}); preds[str(dim)]=sims.tolist()
+        meta={"schema_version":2,"plan":plan,"model_revision":revision,"dataset_revision":dsrev,"calibration_hash":calibration["manifest_hash"]}; save_task_outputs(a.output,rows,{"by_dimension":preds},meta,pca)
+    else:
+        rows,preds,meta,pca=evaluate_bundle(bundle,plan,encode,calibration); meta.update(model_revision=revision,hardware=hardware,seconds_before_export=time.perf_counter()-started); save_task_outputs(a.output,rows,preds,meta,pca)
+    print(f"Saved results to {a.output}")
+if __name__=="__main__":
+    try: main()
+    except (ValueError,RuntimeError,ImportError,OSError) as e: raise SystemExit(f"Experiment stopped: {e}") from e
