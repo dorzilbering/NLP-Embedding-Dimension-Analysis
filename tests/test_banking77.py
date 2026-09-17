@@ -81,4 +81,4 @@ def test_full_local_bundle_dry_run(dataset,tmp_path,capsys):
     path=tmp_path/"bank.json"; path.write_text(json.dumps(export(dataset)),encoding="utf-8")
     run_experiment.main(["--task","Banking77","--model","Phi4-mini","--data",str(path),"--dimensions","3072","--dry-run"])
     plan=json.loads(capsys.readouterr().out); assert plan["executable"]
-    assert plan["data"]["source"]["train_count"]==10003 and plan["data"]["source"]["evaluation_count"]==3080
+    assert plan["data"]["source"]["official_counts"]==SPLIT_COUNTS
