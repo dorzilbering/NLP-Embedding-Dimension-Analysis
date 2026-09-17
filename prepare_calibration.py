@@ -41,7 +41,13 @@ def main(argv=None):
     api = HfApi()
     bank_rev = api.dataset_info("PolyAI/banking77").sha
     sts_rev = api.dataset_info("mteb/stsbenchmark-sts").sha
-    bank = load_dataset("PolyAI/banking77", revision=bank_rev, trust_remote_code=True)
+    # Current datasets releases no longer execute the legacy Banking77 loading script.
+    # Pin the immutable Hub revision and read its official Parquet files directly.
+    bank_base = f"hf://datasets/PolyAI/banking77@{bank_rev}/data"
+    bank = load_dataset("parquet", data_files={
+        "train": f"{bank_base}/train-00000-of-00001.parquet",
+        "test": f"{bank_base}/test-00000-of-00001.parquet",
+    })
     sts = load_dataset("mteb/stsbenchmark-sts", revision=sts_rev)
     excluded = evaluation_keys((("Banking77", a.banking), ("SciFact", a.scifact), ("Arxiv-Clustering", a.arxiv)))
     excluded.update(text_key(x["text"]) for x in bank["test"])
