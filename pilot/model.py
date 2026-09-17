@@ -19,7 +19,7 @@ def last_valid_pool(hidden, attention_mask):
 def check_gpu():
     import torch
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU unavailable.")
+        raise RuntimeError("CPU model execution is intentionally disabled; CUDA GPU unavailable.")
     free, total = torch.cuda.mem_get_info()
     if free < 8 * 1024**3:
         raise RuntimeError("Need at least 8 GiB free CUDA memory.")
@@ -41,48 +41,32 @@ class FrozenEncoder:
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, revision=revision, trust_remote_code=False)
         self.tokenizer.padding_side = "right"
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        kwargs = dict(revision=revision, trust_remote_code=False, device_map={"": "cuda:0"},
-                      low_cpu_mem_usage=True)
+        if self.tokenizer.pad_token_id is None: self.tokenizer.pad_token = self.tokenizer.eos_token
+        kwargs = dict(revision=revision, trust_remote_code=False, device_map={"": "cuda:0"}, low_cpu_mem_usage=True)
         self.quantization = spec.get("t4_quantization")
         if self.quantization == "4bit":
-            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True,
-                bnb_4bit_compute_dtype=self.dtype, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True)
-        else:
-            kwargs["torch_dtype"] = self.dtype
-        self.model = AutoModel.from_pretrained(self.model_id, **kwargs).eval()
-        self.model.requires_grad_(False)
+            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=self.dtype, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True)
+        else: kwargs["torch_dtype"] = self.dtype
+        self.model = AutoModel.from_pretrained(self.model_id, **kwargs).eval(); self.model.requires_grad_(False)
         config_width = getattr(self.model.config, "hidden_size", None)
-        if config_width is None and hasattr(self.model.config, "text_config"):
-            config_width = self.model.config.text_config.hidden_size
-        if config_width != self.width:
-            raise ValueError(f"Unexpected hidden width for {model_name}: {config_width} != {self.width}")
+        if config_width is None and hasattr(self.model.config, "text_config"): config_width = self.model.config.text_config.hidden_size
+        if config_width != self.width: raise ValueError(f"Unexpected hidden width for {model_name}: {config_width} != {self.width}")
 
     def encode(self, texts, batch_size=None):
         chunks, size = [], batch_size or self.batch_size
         with self.torch.inference_mode():
             for start in range(0, len(texts), size):
-                inputs = self.tokenizer(texts[start:start+size], padding=True, truncation=True,
-                                        max_length=self.max_length, return_tensors="pt").to("cuda:0")
-                output = self.model(**inputs, use_cache=False, output_hidden_states=False,
-                                    output_attentions=False, return_dict=True)
-                hidden = output.last_hidden_state
-                pooled = last_valid_pool(hidden, inputs["attention_mask"])
-                chunks.append(pooled.float().cpu().numpy())
+                inputs = self.tokenizer(texts[start:start+size], padding=True, truncation=True, max_length=self.max_length, return_tensors="pt").to("cuda:0")
+                output = self.model(**inputs, use_cache=False, output_hidden_states=False, output_attentions=False, return_dict=True)
+                chunks.append(last_valid_pool(output.last_hidden_state, inputs["attention_mask"]).float().cpu().numpy())
         return checked(np.concatenate(chunks), len(texts), self.width)
 
     def validate_batching(self):
-        texts = ["A cat sleeps.", "A scientist examines carefully prepared samples in a laboratory."]
-        single = normalize(self.encode(texts, batch_size=1))
-        together = normalize(self.encode(texts, batch_size=2))
-        agreement = float(np.min(np.sum(single * together, axis=1)))
-        if agreement < 0.995:
-            raise ValueError(f"Batch invariance failed: {agreement}")
-        return {"single_vs_batch": agreement}
+        texts=["A cat sleeps.","A scientist examines carefully prepared samples in a laboratory."]
+        single=normalize(self.encode(texts,batch_size=1)); together=normalize(self.encode(texts,batch_size=2)); agreement=float(np.min(np.sum(single*together,axis=1)))
+        if agreement < .995: raise ValueError(f"Batch invariance failed: {agreement}")
+        return {"single_vs_batch":agreement}
 
-# Backward compatibility for the completed Phi pilot.
-MODEL_ID = MODEL_SPECS["Phi4-mini"]["model_id"]
+MODEL_ID=MODEL_SPECS["Phi4-mini"]["model_id"]
 class PhiEncoder(FrozenEncoder):
-    def __init__(self, revision, batch_size=4, max_length=256):
-        super().__init__("Phi4-mini", revision, batch_size, max_length)
+    def __init__(self,revision,batch_size=4,max_length=256): super().__init__("Phi4-mini",revision,batch_size,max_length)
