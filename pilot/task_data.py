@@ -45,6 +45,11 @@ def validate_bundle(bundle,task):
         overlap=_no_overlap(fit,evaluation,allow_training_duplicates=task=="Banking77",allow_cross_split_overlap=task=="Banking77")
         if {r["id"] for r in fit}&{r["id"] for r in evaluation}: raise ValueError("Training and evaluation IDs must be distinct.")
         if task=="Banking77":
+            by_text={}
+            for r in fit:
+                key=text_key(r["text"]); previous=by_text.get(key)
+                if previous is not None and previous!=r["label"]: raise ValueError("Conflicting labels for duplicate Banking77 training text.")
+                by_text[key]=r["label"]
             labels={r["label"] for r in fit}
             if len(labels)!=77 or {r["label"] for r in evaluation}-labels: raise ValueError("Banking77 requires all 77 train classes and no unseen test class.")
             bundle.setdefault("validation_notes",{})["normalized_train_test_text_overlap_count"]=len(overlap)
