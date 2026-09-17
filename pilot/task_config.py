@@ -10,7 +10,7 @@ PROTOCOLS = {
                   "classifier": {"C": 1.0, "solver": "lbfgs", "max_iter": 1000, "tol": 1e-4, "class_weight": None}},
     "Arxiv-Clustering": {"id": "arxiv-s2s-per-set-minibatch-kmeans-v2", "metrics": ["v_measure", "adjusted_rand", "nmi"],
                          "k_policy": "number of unique labels per official set",
-                         "aggregation": "unweighted arithmetic mean over sets",
+                         "aggregation": "unweighted arithmetic mean over non-degenerate official sets",
                          "clustering": {"init": "k-means++", "n_init": 10, "max_iter": 100, "batch_size": 1024,
                                         "tol": 0.0, "max_no_improvement": 10, "reassignment_ratio": 0.01}},
 }
@@ -41,10 +41,10 @@ def task_plan(task, model="Phi4-mini", dimensions=None, train_count=None, seed=4
             blockers.append("Provide the shared training-only PCA calibration bundle with --calibration.")
         else:
             texts = calibration.get("texts", []) if isinstance(calibration, dict) else []
-            if calibration.get("role") != "shared_pca_calibration" or len(texts) <= components:
+            if not isinstance(calibration, dict) or calibration.get("role") != "shared_pca_calibration" or len(texts) <= components:
                 blockers.append(f"Calibration must contain >{components} eligible texts.")
     return {"model": model, "model_id": spec["model_id"], "task": task, "native_dimension": spec["native_dimension"],
-            "dimensions": list(dims), "pca_components": components, "pca_train_sentences": len(calibration["texts"]) if calibration else None,
+            "dimensions": list(dims), "pca_components": components, "pca_train_sentences": len(calibration["texts"]) if isinstance(calibration,dict) else None,
             "seed": seed, "batch_size": batch_size, "max_length": max_length, "loading_strategy": loading_strategy,
             "quantization": spec.get("t4_quantization"), "protocol": PROTOCOLS[task], "data": summary,
             "implemented": True, "executable": not blockers, "blockers": blockers,
