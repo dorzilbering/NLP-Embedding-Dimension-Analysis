@@ -26,10 +26,13 @@ def evaluate_arxiv(bundle,plan,encode,pca):
     from pilot.evaluation import clustering
     validate_arxiv_bundle(bundle); width=plan["native_dimension"]; per_dim={}; predictions={}; evaluable=[g for g in bundle["sets"] if len(set(g["labels"]))>=2]
     if not evaluable: raise ValueError("No evaluable Arxiv clustering sets with at least two classes.")
+    # Native LM embeddings are independent of the requested output dimension. Encode each
+    # official set once, then reuse those vectors for native/PCA evaluations.
+    native={g["id"]:checked(encode(g["sentences"]),len(g["sentences"]),width) for g in evaluable}
     for dim in plan["dimensions"]:
         per_set=[]; predictions[str(dim)]={}
         for g in evaluable:
-            x=checked(encode(g["sentences"]),len(g["sentences"]),width); x=normalize(x) if dim==width else project(x,pca,dim)
+            x=native[g["id"]]; x=normalize(x) if dim==width else project(x,pca,dim)
             metrics,pred=clustering(x,g["labels"],plan["seed"]); per_set.append(metrics); predictions[str(dim)][g["id"]]=pred
         per_dim[dim]=per_set
     total=sum(len(g["sentences"]) for g in evaluable); rows=[]
