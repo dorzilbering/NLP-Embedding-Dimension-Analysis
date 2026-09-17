@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 
-from pilot.arxiv import DATASET_ID, TASK_NAME, PCA_BLOCKER, build_bundle
+from pilot.arxiv import DATASET_ID, TASK_NAME, build_bundle
 
 
 def main(argv=None):
@@ -15,7 +15,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.dry_run:
         print(json.dumps({"dataset": DATASET_ID, "task": TASK_NAME, "split": "test",
-                          "structure": "one sentences/labels clustering set per row", "pca_blocker": PCA_BLOCKER}, indent=2))
+                          "structure": "one sentences/labels clustering set per row",
+                          "reduction": "shared training-only calibration PCA; never fitted on Arxiv test sets"}, indent=2))
         return
     if args.output.exists():
         parser.error("Output already exists; use a fresh path.")
@@ -35,7 +36,7 @@ def main(argv=None):
     with args.output.open("x", encoding="utf-8") as handle:
         json.dump(bundle, handle, ensure_ascii=False, allow_nan=False)
     print(json.dumps({"saved": str(args.output), "revision": revision, "sets": len(bundle["sets"]),
-                      "pca_blocker": PCA_BLOCKER}, indent=2))
+                      "reduction": "shared calibration PCA"}, indent=2))
 
 
 if __name__ == "__main__":
