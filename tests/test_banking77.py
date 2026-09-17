@@ -73,8 +73,11 @@ def test_preparation_mocked_download_and_immutable_revision(dataset,tmp_path,mon
     import prepare_banking77
     calls=[]
     def info(identifier,revision): calls.append(("resolve",identifier,revision)); return SimpleNamespace(sha="a"*40)
-    monkeypatch.setitem(sys.modules,"huggingface_hub",SimpleNamespace(HfApi=lambda:SimpleNamespace(dataset_info=info))); monkeypatch.setitem(sys.modules,"datasets",SimpleNamespace(get_dataset_config_names=lambda *a,**k:["fixture-config"],load_dataset=lambda identifier,name,revision:(calls.append(("load",identifier,name,revision)) or dataset)))
+    def load(identifier,**kwargs): calls.append(("load",identifier,kwargs)); return dataset
+    monkeypatch.setitem(sys.modules,"huggingface_hub",SimpleNamespace(HfApi=lambda:SimpleNamespace(dataset_info=info)))
+    monkeypatch.setitem(sys.modules,"datasets",SimpleNamespace(load_dataset=load))
     output=tmp_path/"bundle.json"; prepare_banking77.main(["--output",str(output)]); data=json.loads(output.read_text()); validate_official_bundle(data); assert task_plan("Banking77",bundle=data,calibration=calibration())["executable"]
+    assert calls[0][0]=="resolve" and calls[1][0:2]==("load","parquet") and set(calls[1][2]["data_files"])=={"train","test"}
 
 def test_full_local_bundle_dry_run(dataset,tmp_path,capsys):
     import run_experiment
