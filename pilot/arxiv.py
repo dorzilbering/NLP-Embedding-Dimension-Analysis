@@ -9,12 +9,13 @@ def validate_arxiv_bundle(bundle):
     if source.get("dataset_id")!=DATASET_ID or source.get("task_name")!=TASK_NAME or source.get("evaluation_split")!="test": raise ValueError("Expected official Arxiv test provenance.")
     if not isinstance(sets,list) or not sets: raise ValueError("Missing clustering sets.")
     for i,g in enumerate(sets):
-        if g.get("id")!=f"test:{i}" or len(g.get("sentences",[]))!=len(g.get("labels",[])) or len(set(g.get("labels",[])))<2: raise ValueError("Invalid clustering set.")
+        sentences=g.get("sentences",[]); labels=g.get("labels",[])
+        if g.get("id")!=f"test:{i}" or not isinstance(sentences,list) or not isinstance(labels,list) or len(sentences)!=len(labels) or len(sentences)<2 or len(set(labels))<2: raise ValueError(f"Invalid clustering set test:{i} (sentences={len(sentences)}, labels={len(labels)}, classes={len(set(labels))}).")
     if source.get("sets_hash")!=fingerprint(sets): raise ValueError("Arxiv set hash mismatch.")
     return bundle
 
 def build_bundle(rows,revision,configuration):
-    sets=[{"id":f"test:{i}","sentences":r["sentences"],"labels":r["labels"]} for i,r in enumerate(rows)]
+    sets=[{"id":f"test:{i}","sentences":list(r["sentences"]),"labels":list(r["labels"])} for i,r in enumerate(rows)]
     return validate_arxiv_bundle({"schema_version":1,"task":"Arxiv-Clustering","sets":sets,"source":{"dataset_id":DATASET_ID,"task_name":TASK_NAME,"configuration":configuration,"revision":revision,"evaluation_split":"test","selection":"full","set_count":len(sets),"sets_hash":fingerprint(sets)}})
 
 def evaluate_arxiv(bundle,plan,encode,pca):
