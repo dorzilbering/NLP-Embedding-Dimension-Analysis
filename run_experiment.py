@@ -15,7 +15,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(); p.add_argument("--task",choices=TASK_SPECS,required=True); p.add_argument("--model",choices=MODEL_SPECS,required=True)
     p.add_argument("--dimensions",nargs="+",type=int); p.add_argument("--data",type=Path); p.add_argument("--calibration",type=Path)
     p.add_argument("--batch-size",type=int,default=4); p.add_argument("--max-length",type=int,default=256); p.add_argument("--seed",type=int,default=42)
-    p.add_argument("--output",type=Path); p.add_argument("--cache",type=Path,default=Path("cache/native")); p.add_argument("--dry-run",action="store_true")
+    p.add_argument("--output",type=Path); p.add_argument("--cache",type=Path,default=Path("cache/native")); p.add_argument("--pca-dir",type=Path,default=Path("cache/pca")); p.add_argument("--dry-run",action="store_true")
     a=p.parse_args(argv); calibration=load_calibration(a.calibration) if a.calibration else None; bundle=load_bundle(a.data,a.task) if a.task!="STSB" and a.data else None
     plan=task_plan(a.task,a.model,a.dimensions,None,a.seed,a.batch_size,a.max_length,None,bundle,LOADING_STRATEGY,calibration)
     if a.dry_run: print(json.dumps(plan,indent=2)); return
@@ -26,26 +26,35 @@ def main(argv=None):
     from huggingface_hub import HfApi
     from pilot.model import FrozenEncoder,check_gpu
     from pilot.core import cached_embeddings,checked,normalize,project
-    from pilot.task_runner import evaluate_bundle,fit_shared_pca,save_task_outputs
+    from pilot.task_runner import evaluate_bundle,save_task_outputs
+    from pilot.pca_artifact import artifact_identity,get_or_fit_pca
     import torch
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed); torch.cuda.manual_seed_all(a.seed)
     hardware=check_gpu(); api=HfApi(); revision=api.model_info(plan["model_id"]).sha
     encoder=FrozenEncoder(a.model,revision,a.batch_size,a.max_length); identity={"model":plan["model_id"],"revision":revision,"width":plan["native_dimension"],"max_length":a.max_length,"quantization":plan["quantization"]}
     def encode(texts): return cached_embeddings(a.cache,identity,texts,encoder.encode)[0]
-    started=time.perf_counter()
+    started=time.perf_counter(); pca=None; pca_reused=None; pca_path=None
+    if plan["pca_components"]:
+        pca_identity=artifact_identity(plan,revision,calibration,a.max_length)
+        pca_path=a.pca_dir/f"{a.model}.npz"
+        pca,pca_reused=get_or_fit_pca(pca_path,pca_identity,calibration,encode)
     if a.task=="STSB":
         from datasets import load_dataset
         from scipy.stats import spearmanr
         dsrev=api.dataset_info("mteb/stsbenchmark-sts").sha; ds=load_dataset("mteb/stsbenchmark-sts",revision=dsrev); rows0=list(ds["validation"])
-        texts=list(dict.fromkeys([r[k] for r in rows0 for k in ("sentence1","sentence2")])); lookup={t:i for i,t in enumerate(texts)}; x=checked(encode(texts),len(texts),plan["native_dimension"]); pca=fit_shared_pca(calibration,plan,encode)
+        texts=list(dict.fromkeys([r[k] for r in rows0 for k in ("sentence1","sentence2")])); lookup={t:i for i,t in enumerate(texts)}; x=checked(encode(texts),len(texts),plan["native_dimension"])
         rows=[]; preds={}
         for dim in plan["dimensions"]:
             z=normalize(x) if dim==plan["native_dimension"] else project(x,pca,dim); sims=np.array([float(z[lookup[r["sentence1"]]]@z[lookup[r["sentence2"]]]) for r in rows0]); score=float(spearmanr(sims,[r["score"] for r in rows0]).statistic)
             rows.append({"model":a.model,"task":"STSB","dataset":"mteb/stsbenchmark-sts","dataset_revision":dsrev,"split":"validation","dimension":dim,"reduction":"native" if dim==plan["native_dimension"] else "pca","metric":"cosine_spearman","score":score,"seed":a.seed,"protocol":"sts-full-validation-v2","n_eval":len(rows0)}); preds[str(dim)]=sims.tolist()
         meta={"schema_version":2,"plan":plan,"model_revision":revision,"dataset_revision":dsrev,"calibration_hash":calibration["manifest_hash"] if calibration else None}; save_task_outputs(a.output,rows,{"by_dimension":preds},meta,pca)
     else:
-        rows,preds,meta,pca=evaluate_bundle(bundle,plan,encode,calibration); meta.update(model_revision=revision,hardware=hardware,seconds_before_export=time.perf_counter()-started); save_task_outputs(a.output,rows,preds,meta,pca)
-    print(f"Saved results to {a.output}")
+        rows,preds,meta,pca=evaluate_bundle(bundle,plan,encode,calibration,pca=pca); meta.update(model_revision=revision,hardware=hardware,seconds_before_export=time.perf_counter()-started); save_task_outputs(a.output,rows,preds,meta,pca)
+    if plan["pca_components"]:
+        meta.update(pca_artifact=str(pca_path),pca_artifact_reused=bool(pca_reused))
+        # Re-export results.json so persistence provenance is recorded after task output creation.
+        (a.output/"results.json").write_text(json.dumps({"metadata":meta,"scores":rows},indent=2,allow_nan=False),encoding="utf-8")
+    print(f"Saved results to {a.output}"+(f" (PCA {'reused' if pca_reused else 'fitted'}: {pca_path})" if pca_path else ""))
 if __name__=="__main__":
     try: main()
     except (ValueError,RuntimeError,ImportError,OSError) as e: raise SystemExit(f"Experiment stopped: {e}") from e
