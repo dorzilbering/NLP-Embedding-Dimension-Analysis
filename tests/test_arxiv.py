@@ -47,8 +47,18 @@ def test_per_set_macro_aggregation_and_export(bundle,monkeypatch,tmp_path):
     assert [r["score"] for r in rows]==[.5,.5,.5]
     assert [len(t) for t in encoded]==[4,2] and len(seen)==2
     assert predictions["by_dimension"]["3072"]["test:0"]==[0]*4
-    assert metadata["aggregation"]=="unweighted arithmetic mean over official sets" and pca is None
+    assert metadata["aggregation"]=="unweighted arithmetic mean over non-degenerate official sets" and metadata["excluded_degenerate_sets"]==[] and pca is None
     save_task_outputs(tmp_path/"out",rows,predictions,metadata,pca); assert not (tmp_path/"out"/"pca.npz").exists()
+
+def test_official_single_class_set_is_preserved_but_excluded_from_scoring(monkeypatch):
+    rows=[{"sentences":["a","b","c","d"],"labels":["x","x","y","y"]},{"sentences":["u","v"],"labels":["only","only"]}]
+    data=build_bundle(rows,"a"*40,"default"); assert data["source"]["degenerate_sets"]==["test:1"] and len(data["sets"])==2
+    import pilot.evaluation as evaluator
+    monkeypatch.setattr(evaluator,"clustering",lambda x,labels,seed:({"v_measure":1.,"adjusted_rand":1.,"nmi":1.},[0]*len(x)))
+    plan=task_plan("Arxiv-Clustering",dimensions=[3072],bundle=data)
+    scored,pred,meta,pca=evaluate_bundle(data,plan,lambda texts:np.ones((len(texts),3072),dtype=np.float32))
+    assert all(r["n_eval"]==4 for r in scored); assert "test:1" not in pred["by_dimension"]["3072"]
+    assert meta["excluded_degenerate_sets"]==["test:1"] and pca is None
 
 def test_reduced_dimensions_require_shared_calibration(bundle):
     for dimension in (1536,768,384):
@@ -58,10 +68,9 @@ def test_reduced_dimensions_require_shared_calibration(bundle):
         assert allowed["executable"]
     with pytest.raises(ValueError,match="determined per official set"): task_plan("Arxiv-Clustering",dimensions=[3072],clusters=2,bundle=bundle)
 
-@pytest.mark.parametrize("fault",["alignment","single_class","legacy","hash","split","id"])
+@pytest.mark.parametrize("fault",["alignment","legacy","hash","split","id"])
 def test_invalid_structure_rejected(bundle,fault):
     if fault=="alignment": bundle["sets"][0]["labels"].pop()
-    elif fault=="single_class": bundle["sets"][0]["labels"]=["a"]*4
     elif fault=="legacy": bundle["train"]=[]
     elif fault=="hash": bundle["source"]["sets_hash"]="wrong"
     elif fault=="split": bundle["source"]["evaluation_split"]="train"
