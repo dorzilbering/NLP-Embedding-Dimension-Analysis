@@ -19,6 +19,7 @@ TASK_SPECS = {
     "STSB": {"type": "sts", "dataset_id": "mteb/stsbenchmark-sts"},
 }
 LOADING_STRATEGY = "t4-auto"
+LEGACY_DIMENSIONS = (3072, 768, 384)
 
 
 def validate_dimensions(dimensions, native_dimension):
@@ -28,6 +29,40 @@ def validate_dimensions(dimensions, native_dimension):
     if len(set(dimensions)) != len(dimensions):
         raise ValueError("Duplicate dimensions are not allowed.")
     return dimensions
+
+
+def make_plan(model="Phi4-mini", task="STSB", dimensions=None, train_count=2000,
+              eval_count=300, batch_size=4, max_length=256, loading_strategy=LOADING_STRATEGY):
+    """Compatibility plan for the historical Phi/STSB pilot runner.
+
+    Final assignment execution uses task_config.task_plan/run_experiment.py. Keeping this
+    function prevents the validated pilot and its tests from breaking during the refactor.
+    """
+    if model not in MODEL_SPECS or task not in TASK_SPECS:
+        raise ValueError("Unknown model or task.")
+    spec = MODEL_SPECS[model]
+    defaults = LEGACY_DIMENSIONS if model == "Phi4-mini" else spec["dimensions"]
+    dims = validate_dimensions(defaults if dimensions is None else dimensions, spec["native_dimension"])
+    if any(d not in spec["dimensions"] for d in dims):
+        raise ValueError("Pilot supports assignment-required dimensions only.")
+    components = max((d for d in dims if d < spec["native_dimension"]), default=0)
+    if train_count < 1 or train_count <= components:
+        raise ValueError(f"Need more than {components} eligible training sentences for centered PCA.")
+    if eval_count < 2 or batch_size < 1 or not 8 <= max_length <= 512:
+        raise ValueError("Need >=2 evaluation pairs, batch-size >=1, and max-length in [8, 512].")
+    if loading_strategy != LOADING_STRATEGY:
+        raise ValueError(f"Pilot loading strategy must be {LOADING_STRATEGY}.")
+    blockers = []
+    if model != "Phi4-mini" or task != "STSB":
+        blockers.append("run_pilot.py is intentionally limited to the historical Phi4-mini/STSB pilot; use run_experiment.py for final assignment runs.")
+    return {"model": model, "model_id": spec["model_id"], "task": task,
+            "dataset_id": TASK_SPECS[task]["dataset_id"], "native_dimension": spec["native_dimension"],
+            "dimensions": list(dims), "pca_components": components,
+            "train_sentences": train_count, "validation_pairs": eval_count,
+            "batch_size": batch_size, "max_length": max_length,
+            "loading_strategy": loading_strategy, "frozen": True,
+            "quantization": spec.get("t4_quantization"), "executable": not blockers,
+            "blockers": blockers, "validation_scope": "legacy pilot compatibility only"}
 
 
 def assignment_matrix():
