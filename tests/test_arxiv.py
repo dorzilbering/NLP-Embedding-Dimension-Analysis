@@ -56,7 +56,7 @@ def test_reduced_dimensions_require_shared_calibration(bundle):
         assert not blocked["executable"] and any("calibration" in b.lower() for b in blocked["blockers"])
         allowed=task_plan("Arxiv-Clustering",dimensions=[3072,dimension],bundle=bundle,calibration=calibration())
         assert allowed["executable"]
-    with pytest.raises(ValueError,match="no longer supported"): task_plan("Arxiv-Clustering",dimensions=[3072],clusters=2,bundle=bundle)
+    with pytest.raises(ValueError,match="determined per official set"): task_plan("Arxiv-Clustering",dimensions=[3072],clusters=2,bundle=bundle)
 
 @pytest.mark.parametrize("fault",["alignment","single_class","legacy","hash","split","id"])
 def test_invalid_structure_rejected(bundle,fault):
