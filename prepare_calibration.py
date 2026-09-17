@@ -7,6 +7,7 @@ excluded. Every model embeds this same manifest and fits one model-specific PCA 
 import argparse, hashlib, json
 from pathlib import Path
 from pilot.task_data import fingerprint, load_bundle, text_key
+from prepare_banking77 import PARQUET_REVISION
 
 CALIBRATION_SIZE = 3072
 
@@ -39,10 +40,9 @@ def main(argv=None):
     from datasets import load_dataset
     from huggingface_hub import HfApi
     api = HfApi()
-    bank_rev = api.dataset_info("PolyAI/banking77").sha
+    bank_rev = api.dataset_info("PolyAI/banking77", revision=PARQUET_REVISION).sha
     sts_rev = api.dataset_info("mteb/stsbenchmark-sts").sha
-    # Current datasets releases no longer execute the legacy Banking77 loading script.
-    # Pin the immutable Hub revision and read its official Parquet files directly.
+    # Pin the same immutable, script-free Banking77 Parquet revision used by prepare_banking77.py.
     bank_base = f"hf://datasets/PolyAI/banking77@{bank_rev}/data"
     bank = load_dataset("parquet", data_files={
         "train": f"{bank_base}/train-00000-of-00001.parquet",
