@@ -19,6 +19,22 @@ def fit_shared_pca(calibration, plan, encode):
     return fit_pca(x, plan["pca_components"], plan["seed"])
 
 
+def evaluate_stsb(rows0, dataset_revision, plan, encode, pca, calibration=None):
+    from scipy.stats import spearmanr
+    width=plan["native_dimension"]
+    texts=list(dict.fromkeys([r[k] for r in rows0 for k in ("sentence1","sentence2")]))
+    lookup={t:i for i,t in enumerate(texts)}; x=checked(encode(texts),len(texts),width)
+    rows=[]; predictions={}
+    for dim in plan["dimensions"]:
+        z=normalize(x) if dim==width else project(x,pca,dim)
+        sims=np.array([float(z[lookup[r["sentence1"]]]@z[lookup[r["sentence2"]]]) for r in rows0])
+        score=float(spearmanr(sims,[r["score"] for r in rows0]).statistic)
+        rows.append({"model":plan["model"],"task":"STSB","dataset":"mteb/stsbenchmark-sts","dataset_revision":dataset_revision,"split":"validation","dimension":dim,"reduction":"native" if dim==width else "pca","metric":"cosine_spearman","score":score,"seed":plan["seed"],"protocol":plan["protocol"]["id"],"n_eval":len(rows0)})
+        predictions[str(dim)]=sims.tolist()
+    meta={"schema_version":2,"plan":plan,"dataset_revision":dataset_revision,"calibration_hash":calibration.get("manifest_hash") if calibration else None,"calibration_count":len(_calibration_texts(calibration))}
+    return rows,{"by_dimension":predictions},meta
+
+
 def evaluate_bundle(bundle, plan, encode, calibration=None, pca=None):
     task = plan["task"]; validate_bundle(bundle, task)
     if plan["pca_components"] and pca is None: pca = fit_shared_pca(calibration, plan, encode)
