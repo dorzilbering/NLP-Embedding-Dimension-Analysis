@@ -35,13 +35,13 @@ def evaluate_stsb(rows0, dataset_revision, plan, encode, pca, calibration=None):
     return rows,{"by_dimension":predictions},meta
 
 
-def evaluate_bundle(bundle, plan, encode, calibration=None, pca=None):
+def evaluate_bundle(bundle, plan, encode, calibration=None, pca=None, checkpoint_dir=None):
     task = plan["task"]; validate_bundle(bundle, task)
     if plan["pca_components"] and pca is None: pca = fit_shared_pca(calibration, plan, encode)
     cal_hash = calibration.get("manifest_hash") if calibration else None; cal_count = len(_calibration_texts(calibration))
     if task == "Arxiv-Clustering":
         from pilot.arxiv import evaluate_arxiv
-        rows, pred, meta = evaluate_arxiv(bundle, plan, encode, pca); meta["calibration_hash"] = cal_hash; meta["calibration_count"] = cal_count
+        rows, pred, meta = evaluate_arxiv(bundle, plan, encode, pca, checkpoint_dir=checkpoint_dir); meta["calibration_hash"] = cal_hash; meta["calibration_count"] = cal_count
         return rows, pred, meta, pca
     width = plan["native_dimension"]
     groups = {"queries": bundle["queries"], "corpus": bundle["corpus"]} if task == "SciFact" else {"fit": bundle["train"], "evaluation": bundle["evaluation"]}
