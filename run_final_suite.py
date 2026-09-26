@@ -57,7 +57,7 @@ def main(argv=None):
             if not plan["executable"]: raise ValueError(f"{model}/{task} blocked: "+" ".join(plan["blockers"]))
             print(f"RUN {model} / {task}",flush=True)
             if task=="STSB": rows,preds,meta=evaluate_stsb(stsb_rows,stsb_revision,plan,encode,pca,calibration)
-            else: rows,preds,meta,_=evaluate_bundle(bundles[task],plan,encode,calibration,pca=pca)
+            else: rows,preds,meta,_=evaluate_bundle(bundles[task],plan,encode,calibration,pca=pca,checkpoint_dir=(out/"set_checkpoints") if task=="Arxiv-Clustering" else None)
             meta.update(model_revision=revision,hardware=hardware,seconds=time.perf_counter()-started,pca_artifact=str(pca_path),pca_artifact_reused=bool(reused))
             save_task_outputs(out,rows,preds,meta,None); state["completed"].append([model,task]); progress(a.output_root,state)
             print(f"DONE {model} / {task} -> {out}",flush=True)
