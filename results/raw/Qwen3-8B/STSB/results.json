@@ -1,0 +1,121 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "plan": {
+      "model": "Qwen3-8B",
+      "model_id": "Qwen/Qwen3-8B",
+      "task": "STSB",
+      "native_dimension": 4096,
+      "dimensions": [
+        4096,
+        2048,
+        1024,
+        512,
+        256
+      ],
+      "pca_components": 2048,
+      "pca_train_sentences": 3072,
+      "seed": 42,
+      "batch_size": 4,
+      "max_length": 256,
+      "loading_strategy": "t4-auto",
+      "quantization": "4bit",
+      "protocol": {
+        "id": "sts-validation-final-v2",
+        "metrics": [
+          "cosine_spearman"
+        ]
+      },
+      "data": null,
+      "implemented": true,
+      "executable": true,
+      "blockers": [],
+      "reduction_policy": "one PCA basis per model fitted on shared training-only calibration and reused across tasks"
+    },
+    "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+    "calibration_hash": "6d121b630ce607657ea66aa1f5382e84ecad9de33c320c497e19fb85c0304fb5",
+    "calibration_count": 3072,
+    "model_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "hardware": {
+      "gpu": "NVIDIA L4",
+      "free_vram_bytes": 23221764096,
+      "total_vram_bytes": 23659151360,
+      "cuda": "12.8"
+    },
+    "seconds": 70.93789714900004,
+    "pca_artifact": "/content/drive/MyDrive/NLP-Embedding-Dimension-Analysis/final_run/pca/Qwen3-8B.npz",
+    "pca_artifact_reused": false
+  },
+  "scores": [
+    {
+      "model": "Qwen3-8B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 4096,
+      "reduction": "native",
+      "metric": "cosine_spearman",
+      "score": 0.31935808217013295,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Qwen3-8B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 2048,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.4307390090013596,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Qwen3-8B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 1024,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.42077745230471897,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Qwen3-8B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 512,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.4081462015948755,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Qwen3-8B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 256,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.39212480476589734,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    }
+  ]
+}

@@ -23,7 +23,10 @@ hf_home/
 data/
 artifacts/
 checkpoints/
-results/
+results/*
+!results/raw/
+!results/raw/**/
+!results/raw/**/results.json
 logs/
 work/
 tmp/

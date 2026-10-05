@@ -1,0 +1,106 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "plan": {
+      "model": "Gemma3-4B",
+      "model_id": "google/gemma-3-4b-it",
+      "task": "STSB",
+      "native_dimension": 2560,
+      "dimensions": [
+        2560,
+        1280,
+        640,
+        320
+      ],
+      "pca_components": 1280,
+      "pca_train_sentences": 3072,
+      "seed": 42,
+      "batch_size": 4,
+      "max_length": 256,
+      "loading_strategy": "t4-auto",
+      "quantization": null,
+      "protocol": {
+        "id": "sts-validation-final-v2",
+        "metrics": [
+          "cosine_spearman"
+        ]
+      },
+      "data": null,
+      "implemented": true,
+      "executable": true,
+      "blockers": [],
+      "reduction_policy": "one PCA basis per model fitted on shared training-only calibration and reused across tasks"
+    },
+    "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+    "calibration_hash": "6d121b630ce607657ea66aa1f5382e84ecad9de33c320c497e19fb85c0304fb5",
+    "calibration_count": 3072,
+    "model_revision": "093f9f388b31de276ce2de164bdc2081324b9767",
+    "hardware": {
+      "gpu": "NVIDIA L4",
+      "free_vram_bytes": 23223861248,
+      "total_vram_bytes": 23659151360,
+      "cuda": "12.8"
+    },
+    "seconds": 46.83706763400005,
+    "pca_artifact": "/content/drive/MyDrive/NLP-Embedding-Dimension-Analysis/final_run/pca/Gemma3-4B.npz",
+    "pca_artifact_reused": false
+  },
+  "scores": [
+    {
+      "model": "Gemma3-4B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 2560,
+      "reduction": "native",
+      "metric": "cosine_spearman",
+      "score": 0.5556569902263853,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Gemma3-4B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 1280,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.5931090569977232,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Gemma3-4B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 640,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.583277146298026,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    },
+    {
+      "model": "Gemma3-4B",
+      "task": "STSB",
+      "dataset": "mteb/stsbenchmark-sts",
+      "dataset_revision": "96943a16ea6a35129e253c659081cb59daf81b30",
+      "split": "validation",
+      "dimension": 320,
+      "reduction": "pca",
+      "metric": "cosine_spearman",
+      "score": 0.5659000079713578,
+      "seed": 42,
+      "protocol": "sts-validation-final-v2",
+      "n_eval": 1500
+    }
+  ]
+}
