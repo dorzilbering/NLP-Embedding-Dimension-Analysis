@@ -1,0 +1,47 @@
+{
+  "status": "pass",
+  "expected_configurations": 84,
+  "represented_configurations": 84,
+  "expected_metric_rows": 210,
+  "metric_rows": 210,
+  "raw_file_count": 20,
+  "issues": [],
+  "warnings": [
+    "Aggregate single-seed scores only: no significance tests or confidence intervals are supported.",
+    "Calibration bundle, PCA arrays, predictions, and historical package versions are absent from this checkout.",
+    "Phi4-mini: mixed task hardware ['NVIDIA L4', 'Tesla T4']; historical dtype cannot be inferred from the loading-policy name alone."
+  ],
+  "sha256": {
+    "Gemma3-4B/Arxiv-Clustering/results.json": "d48cc1ed9393480af7d33033e32a9eda2567e2fc2482eca8fd32ac25d90673f4",
+    "Gemma3-4B/Banking77/results.json": "c8854e9a9478e91e89f6d04b3cf84b2c719a18437a73f43b594426c5e6db07d0",
+    "Gemma3-4B/SciFact/results.json": "c633520c616a23ab03ec94e58de9f14c071dd3fffd1cb4359b9bc7f9e838ea2c",
+    "Gemma3-4B/STSB/results.json": "a878a4b09b67cdd79ab791fef3659169d9af95df03c6def2b9829382a8f939c4",
+    "Llama3.2-3B/Arxiv-Clustering/results.json": "6d9f7a2cbeb5a5ba29299c5083b318125be731b26320c677564739f025bb4169",
+    "Llama3.2-3B/Banking77/results.json": "21312bf208242803415270cfa0d2c7e62234e120399bdc210eca218466b93a54",
+    "Llama3.2-3B/SciFact/results.json": "480b66f525b2e7240b3250ad43f270b420564f0a8ba84b653defe4c7b08f7a9b",
+    "Llama3.2-3B/STSB/results.json": "5df88dd4c08908e3a0a151ef2e5aa545e9101db45312fe364be31fe12b6fe411",
+    "Mistral-7B/Arxiv-Clustering/results.json": "c9d2feb222b9415aaa2329e22608befaba564de1a15c0db750edd3ae82f5a2b0",
+    "Mistral-7B/Banking77/results.json": "a3b30454defcfaeb2259cc2ef9ac79fb57f70c2f0149b9e4211fcd89cf814598",
+    "Mistral-7B/SciFact/results.json": "280331be820099e18fcc8226bdc0f3a49c07c75e9eaf0073f3c7f2db0ccbce2e",
+    "Mistral-7B/STSB/results.json": "f0a59d6d0aa30b1d408e6d7b5226d98fc3b29a92746cfae76537e88464fa965a",
+    "Phi4-mini/Arxiv-Clustering/results.json": "82ecd9e8113b3d864d8af91dd3170192883a596519d0d02ca082f7452e5c34b3",
+    "Phi4-mini/Banking77/results.json": "d145472b016020e1136289bacbcbc210ca3c5d5324b52b66f9173c3828c83016",
+    "Phi4-mini/SciFact/results.json": "24e0f347a9b1fbbc9ab51c052fd36e71d4419eae8d634a5fe911b9c78d122b20",
+    "Phi4-mini/STSB/results.json": "43a0150b97147d0e4ee30302558d0762a3c4ef2d3e86021a465ca360a8d92d99",
+    "Qwen3-8B/Arxiv-Clustering/results.json": "7bfcc872470cb2aa450006cb123f84d1f858a4b9b355ff62431fdd53b67a6d16",
+    "Qwen3-8B/Banking77/results.json": "3d2b7e8b57f46da9da9379ed4e3c918071e6886ffdd918f98e670de7676a22be",
+    "Qwen3-8B/SciFact/results.json": "c752bb60fb6f2ae375b99dd8f05b3db0b80fa55d5f8395e813bd87bd8aba0e57",
+    "Qwen3-8B/STSB/results.json": "6bf9a0d45a16b8a5adeb03d967f7a230ecccfde0555efc7c0244571ba11b1a77"
+  },
+  "analysis_environment": {
+    "python": "3.12.14",
+    "matplotlib": "3.10.3",
+    "numpy": "2.2.6"
+  },
+  "retention_threshold_pct": 95,
+  "formulas": {
+    "delta_score": "score - native_score",
+    "relative_change_pct": "100 * (score - native_score) / native_score, only if native_score > 0",
+    "retained_native_pct": "100 * score / native_score, only if native_score > 0"
+  }
+}

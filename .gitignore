@@ -1,5 +1,7 @@
 # Python environments and caches
 .venv/
+.venv-analysis/
+.venv-test/
 venv/
 env/
 ENV/
@@ -27,6 +29,17 @@ results/*
 !results/raw/
 !results/raw/**/
 !results/raw/**/results.json
+# Submission artifacts derived from the unchanged raw JSON.
+!results/tables/
+results/tables/*
+!results/tables/*.csv
+!results/tables/*.md
+!results/tables/validation.json
+!results/figures/
+results/figures/*
+!results/figures/*.pdf
+!results/figures/*.svg
+!results/figures/*.png
 logs/
 work/
 tmp/

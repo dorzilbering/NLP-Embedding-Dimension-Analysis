@@ -1,0 +1,5 @@
+# Full offline test collection without language-model execution dependencies.
+# Tests requiring torch/transformers skip in this isolated environment.
+-r requirements-analysis.txt
+datasets==3.6.0
+huggingface-hub==0.33.4
