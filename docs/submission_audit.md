@@ -4,8 +4,9 @@ The first-pass observations below are retained as an audit record. Safe submissi
 cleanup has now corrected README and `docs/task_data.md`, aligned calibration paths
 and task protocols, added the missing Colab bitsandbytes requirement using the exact
 existing experiment constraint, added a separate offline-test requirements file,
-and allowed narrow tracking of derived tables/figures. No experiment implementation,
-raw results, historical code or existing tests were modified. No files were deleted.
+and allowed narrow tracking of derived tables/figures. The individual `run_experiment.py` cache-width call was subsequently corrected
+for non-3072 models. No archived raw results or historical outputs were modified;
+no files were deleted. The correction has not been validated by a GPU run.
 References below to the old README or ignore rules describe the inspected snapshot,
 not their corrected current state. Implementation/provenance proposals remain open.
 
@@ -88,9 +89,10 @@ T4. `t4-auto` is a loading-policy identifier, not proof all results used a T4.
 4. Strengthen Arxiv checkpoint identity: reuse checks only set ID and dimensions,
    not model/revision/bundle/PCA hash/seed. This is a potential stale-checkpoint risk,
    not proof that these final results are wrong. Original checkpoints are needed to audit it.
-5. `run_experiment.py` calls native cache without the selected native width, relying on
-   the cache's default 3072. This affects non-3072 models in that entry point; final suite
-   passes native width explicitly. Fix and test in a separate implementation pass.
+5. **Corrected after the original audit:** `run_experiment.py` now passes the selected
+   native dimension explicitly to the cache, as the final suite already did. A GPU
+   execution regression test remains outstanding; this code correction does not alter
+   archived results.
 6. Improve PCA artifact finite-value checks and checksum validation; recorded path equality
    cannot prove the underlying basis bytes were identical across sessions.
 7. Reformat dense one-line scripts/comments after methodological corrections. Consider a
@@ -106,7 +108,8 @@ The existing `.gitignore` appropriately excludes data, models, caches and creden
 but `results/*` also ignores all generated tables/figures. Add narrow exceptions for
 submission tables and vector/PNG figures, or document intentional forced inclusion.
 Review license/citation and data/model attribution requirements for submission.
-The first pass left existing files untouched. Subsequent safe cleanup updated only
-documentation, Colab requirements and ignore rules. Historical code and experimental
+The first pass left existing files untouched. Subsequent cleanup updated
+documentation, Colab requirements and ignore rules, followed by the targeted
+individual-runner native-cache-width fix. Historical code and experimental
 results remain intact. License/citation review and missing original-artifact recovery
 remain submission considerations; no provenance was fabricated.
