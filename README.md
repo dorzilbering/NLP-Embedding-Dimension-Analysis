@@ -146,9 +146,10 @@ loads/fits its shared PCA, and evaluates all four tasks. A future run using
 `artifacts/new_suite/results/<model>/<task>/`, separate from the submitted
 `results/raw/` archive. It also writes PCA artifacts and suite progress. Its current
 resume checks cover dimension presence, not complete metric/provenance validation.
-Arxiv checkpoints also have limited identity validation. These limitations and a
-non-3072 cache-width issue in `run_experiment.py` remain documented in the
-[audit](docs/submission_audit.md); experiment code has not been changed in cleanup.
+Arxiv checkpoints also have limited identity validation. These limitations are
+recorded in the [audit](docs/submission_audit.md). The individual runner's
+non-3072 native-cache-width issue was subsequently fixed; the archived raw results
+and final suite were not changed. This fix has not been GPU-validated.
 
 ## Project structure and historical code
 
