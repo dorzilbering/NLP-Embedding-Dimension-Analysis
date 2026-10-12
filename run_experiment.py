@@ -32,7 +32,7 @@ def main(argv=None):
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed); torch.cuda.manual_seed_all(a.seed)
     hardware=check_gpu(); api=HfApi(); revision=api.model_info(plan["model_id"]).sha
     encoder=FrozenEncoder(a.model,revision,a.batch_size,a.max_length); identity={"model":plan["model_id"],"revision":revision,"width":plan["native_dimension"],"max_length":a.max_length,"quantization":plan["quantization"]}
-    def encode(texts): return cached_embeddings(a.cache,identity,texts,encoder.encode)[0]
+    def encode(texts): return cached_embeddings(a.cache,identity,texts,encoder.encode,native_dimension=plan["native_dimension"])[0]
     started=time.perf_counter(); pca=None; pca_reused=None; pca_path=None
     if plan["pca_components"]:
         pca_identity=artifact_identity(plan,revision,calibration,a.max_length)
