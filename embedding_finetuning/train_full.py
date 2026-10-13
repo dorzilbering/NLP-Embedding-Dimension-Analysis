@@ -171,6 +171,8 @@ def main():
     latest = output / "latest_training.pt"
     start_epoch = 1
     start_batch = 0
+    epoch_loss_sum = 0.0
+    epoch_batches_done = 0
 
     if args.resume:
         if not latest.exists():
@@ -187,6 +189,8 @@ def main():
         global_steps = state["global_steps"]
         start_epoch = state["next_epoch"]
         start_batch = state["next_batch"]
+        epoch_loss_sum = state.get("epoch_loss_sum", 0.0)
+        epoch_batches_done = state.get("epoch_batches_done", 0)
         random.setstate(state["python_rng"])
         np.random.set_state(state["numpy_rng"])
         torch.set_rng_state(state["torch_rng"])
@@ -206,6 +210,8 @@ def main():
             "global_steps": global_steps,
             "next_epoch": next_epoch,
             "next_batch": next_batch,
+            "epoch_loss_sum": epoch_loss_sum if next_epoch == epoch else 0.0,
+            "epoch_batches_done": epoch_batches_done if next_epoch == epoch else 0,
             "python_rng": random.getstate(),
             "numpy_rng": np.random.get_state(),
             "torch_rng": torch.get_rng_state(),
@@ -221,8 +227,9 @@ def main():
         backbone.train()
         head.train()
         optimizer.zero_grad(set_to_none=True)
-        total_loss = 0.0
-        batches = 0
+        if epoch != start_epoch or start_batch == 0:
+            epoch_loss_sum = 0.0
+            epoch_batches_done = 0
         stopped_mid_epoch = False
         resume_epoch_after_loop = epoch + 1
         resume_batch_after_loop = 0
@@ -232,8 +239,8 @@ def main():
             logits = forward(encoded)
             loss = F.cross_entropy(logits, labels.to("cuda"))
             (loss / args.grad_accum).backward()
-            total_loss += loss.item()
-            batches += 1
+            epoch_loss_sum += loss.item()
+            epoch_batches_done += 1
             last_batch = batch_index + 1 == len(train_loader)
             if (batch_index + 1) % args.grad_accum == 0 or last_batch:
                 assert embedding_param.grad is not None and embedding_param.grad.float().norm().item() > 0, "Missing embedding gradient"
@@ -252,8 +259,13 @@ def main():
                     resume_batch_after_loop = batch_index + 1 if stopped_mid_epoch else 0
                     break
 
+        if stopped_mid_epoch:
+            save_resume(resume_epoch_after_loop, resume_batch_after_loop)
+            print(f"Stopped mid-epoch at batch={resume_batch_after_loop}; no epoch validation performed", flush=True)
+            break
+
         validation = evaluate(val_loader)
-        entry = {"epoch": epoch, "updates": global_steps, "train_loss": total_loss / max(batches, 1), "validation": validation}
+        entry = {"epoch": epoch, "updates": global_steps, "train_loss": epoch_loss_sum / max(epoch_batches_done, 1), "validation": validation}
         history.append(entry)
         (output / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         print(json.dumps(entry), flush=True)
