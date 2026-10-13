@@ -59,6 +59,8 @@ def main():
     p.add_argument("--max-length", type=int, default=64)
     p.add_argument("--lr", type=float, default=0.001)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--train-limit", type=int, default=0, help="Diagnostic: use first N training examples, 0 uses full data")
+    p.add_argument("--optimizer", choices=["sgd", "adamw8bit"], default="sgd")
     p.add_argument("--max-train-steps", type=int, default=0, help="0 = full epochs; positive = limited diagnostic run")
     p.add_argument("--skip-test", action="store_true", help="Use for calibration, not final experiment")
     p.add_argument("--no-checkpoint", action="store_true", help="Do not save huge weights in diagnostic runs")
@@ -79,6 +81,10 @@ def main():
     test_set = BankingDataset(data_dir / "test.csv")
     assert (len(train_set), len(val_set), len(test_set)) == (9002, 1001, 3080)
     assert set(int(r["label"]) for r in train_set.rows) == set(range(77))
+    if args.train_limit:
+        assert args.max_train_steps > 0 and args.skip_test, "train-limit is for diagnostics only"
+        assert 1 <= args.train_limit <= len(train_set)
+        train_set.rows = train_set.rows[:args.train_limit]
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -115,9 +121,14 @@ def main():
     head = nn.Linear(native, 77, device="cuda", dtype=torch.float32)
 
     # SGD avoids the very large optimizer state of AdamW for a fully trainable 3B+ model.
-    optimizer = torch.optim.SGD(
-        list(backbone.parameters()) + list(head.parameters()), lr=args.lr
-    )
+    if args.optimizer == "adamw8bit":
+        try:
+            import bitsandbytes as bnb
+        except ImportError as exc:
+            raise RuntimeError("Install bitsandbytes: pip install bitsandbytes") from exc
+        optimizer = bnb.optim.AdamW8bit(list(backbone.parameters()) + list(head.parameters()), lr=args.lr)
+    else:
+        optimizer = torch.optim.SGD(list(backbone.parameters()) + list(head.parameters()), lr=args.lr)
     embedding = backbone.get_input_embeddings()
     embedding_param = next(embedding.parameters())
     embedding_ids = {id(x) for x in embedding.parameters()}
@@ -159,7 +170,7 @@ def main():
         "transformer_frozen": False,
         "embedding_trainable": True,
         "reduced_embedding_initialization": "first columns plus zero-padded identity projection",
-        "optimizer": "SGD",
+        "optimizer": args.optimizer,
         "checkpoint_selection": "highest validation macro F1",
         "test_policy": "once after best checkpoint is restored",
     })
@@ -179,7 +190,7 @@ def main():
             raise FileNotFoundError(f"No resume checkpoint: {latest}")
         state = torch.load(latest, map_location="cpu", weights_only=False)
         saved_config = state["run_config"]
-        for field in ("model", "dimension", "batch_size", "grad_accum", "max_length", "lr", "seed"):
+        for field in ("model", "dimension", "batch_size", "grad_accum", "max_length", "lr", "seed", "optimizer", "train_limit"):
             assert saved_config[field] == getattr(args, field), f"Resume configuration mismatch: {field}"
         backbone.load_state_dict(state["backbone"])
         head.load_state_dict(state["head"])
