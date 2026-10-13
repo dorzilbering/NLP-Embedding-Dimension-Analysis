@@ -5,6 +5,7 @@ Validation chooses the best checkpoint; official test is evaluated once after tr
 import argparse
 import csv
 import json
+import os
 import random
 from pathlib import Path
 
@@ -61,9 +62,12 @@ def main():
     p.add_argument("--max-train-steps", type=int, default=0, help="0 = full epochs; positive = limited diagnostic run")
     p.add_argument("--skip-test", action="store_true", help="Use for calibration, not final experiment")
     p.add_argument("--no-checkpoint", action="store_true", help="Do not save huge weights in diagnostic runs")
+    p.add_argument("--save-every", type=int, default=250, help="Optimizer updates between resumable checkpoints; 0 disables periodic saves")
+    p.add_argument("--resume", action="store_true", help="Resume from latest_training.pt in output-dir")
     args = p.parse_args()
     assert args.epochs > 0 and args.batch_size > 0 and args.grad_accum > 0
     assert args.lr > 0 and torch.cuda.is_available()
+    assert not (args.resume and args.no_checkpoint), "Resume requires checkpointing"
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -91,8 +95,9 @@ def main():
         labels = torch.tensor([int(r["label"]) for r in rows], dtype=torch.long)
         return encoded, labels
 
-    generator = torch.Generator().manual_seed(args.seed)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=generator, collate_fn=collate)
+    def train_loader_for_epoch(epoch):
+        generator = torch.Generator().manual_seed(args.seed + epoch)
+        return DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=generator, collate_fn=collate)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate)
 
@@ -163,13 +168,64 @@ def main():
     best_f1 = -1.0
     global_steps = 0
     checkpoint = output / "best_model.pt"
-    for epoch in range(1, args.epochs + 1):
+    latest = output / "latest_training.pt"
+    start_epoch = 1
+    start_batch = 0
+
+    if args.resume:
+        if not latest.exists():
+            raise FileNotFoundError(f"No resume checkpoint: {latest}")
+        state = torch.load(latest, map_location="cpu", weights_only=False)
+        saved_config = state["run_config"]
+        for field in ("model", "dimension", "batch_size", "grad_accum", "max_length", "lr", "seed"):
+            assert saved_config[field] == getattr(args, field), f"Resume configuration mismatch: {field}"
+        backbone.load_state_dict(state["backbone"])
+        head.load_state_dict(state["head"])
+        optimizer.load_state_dict(state["optimizer"])
+        history = state["history"]
+        best_f1 = state["best_f1"]
+        global_steps = state["global_steps"]
+        start_epoch = state["next_epoch"]
+        start_batch = state["next_batch"]
+        random.setstate(state["python_rng"])
+        np.random.set_state(state["numpy_rng"])
+        torch.set_rng_state(state["torch_rng"])
+        torch.cuda.set_rng_state_all(state["cuda_rng"])
+        print(f"Resumed at epoch={start_epoch}, batch={start_batch}, updates={global_steps}", flush=True)
+
+    def save_resume(next_epoch, next_batch):
+        if args.no_checkpoint:
+            return
+        state = {
+            "run_config": vars(args).copy(),
+            "backbone": backbone.state_dict(),
+            "head": head.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "history": history,
+            "best_f1": best_f1,
+            "global_steps": global_steps,
+            "next_epoch": next_epoch,
+            "next_batch": next_batch,
+            "python_rng": random.getstate(),
+            "numpy_rng": np.random.get_state(),
+            "torch_rng": torch.get_rng_state(),
+            "cuda_rng": torch.cuda.get_rng_state_all(),
+        }
+        temporary = output / "latest_training.tmp.pt"
+        torch.save(state, temporary)
+        os.replace(temporary, latest)
+        print(f"Resume checkpoint saved at update {global_steps}", flush=True)
+
+    for epoch in range(start_epoch, args.epochs + 1):
+        train_loader = train_loader_for_epoch(epoch)
         backbone.train()
         head.train()
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
         batches = 0
         for batch_index, (encoded, labels) in enumerate(train_loader):
+            if epoch == start_epoch and batch_index < start_batch:
+                continue
             logits = forward(encoded)
             loss = F.cross_entropy(logits, labels.to("cuda"))
             (loss / args.grad_accum).backward()
@@ -185,11 +241,13 @@ def main():
                 global_steps += 1
                 if global_steps % 100 == 0:
                     print(f"epoch={epoch} update={global_steps} batch_loss={loss.item():.4f}", flush=True)
+                if args.save_every and global_steps % args.save_every == 0:
+                    save_resume(epoch if not last_batch else epoch + 1, batch_index + 1 if not last_batch else 0)
                 if args.max_train_steps and global_steps >= args.max_train_steps:
                     break
 
         validation = evaluate(val_loader)
-        entry = {"epoch": epoch, "updates": global_steps, "train_loss": total_loss / batches, "validation": validation}
+        entry = {"epoch": epoch, "updates": global_steps, "train_loss": total_loss / max(batches, 1), "validation": validation}
         history.append(entry)
         (output / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         print(json.dumps(entry), flush=True)
@@ -197,12 +255,13 @@ def main():
             best_f1 = validation["macro_f1"]
             if not args.no_checkpoint:
                 torch.save({
-                "backbone": backbone.state_dict(),
-                "head": head.state_dict(),
-                "epoch": epoch,
-                "validation": validation,
+                    "backbone": backbone.state_dict(),
+                    "head": head.state_dict(),
+                    "epoch": epoch,
+                    "validation": validation,
                 }, checkpoint)
                 print(f"Saved best checkpoint: {checkpoint}", flush=True)
+        save_resume(epoch + 1, 0)
         if args.max_train_steps and global_steps >= args.max_train_steps:
             break
 
