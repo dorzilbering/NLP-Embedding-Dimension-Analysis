@@ -60,6 +60,7 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-train-steps", type=int, default=0, help="0 = full epochs; positive = limited diagnostic run")
     p.add_argument("--skip-test", action="store_true", help="Use for calibration, not final experiment")
+    p.add_argument("--no-checkpoint", action="store_true", help="Do not save huge weights in diagnostic runs")
     args = p.parse_args()
     assert args.epochs > 0 and args.batch_size > 0 and args.grad_accum > 0
     assert args.lr > 0 and torch.cuda.is_available()
@@ -194,13 +195,14 @@ def main():
         print(json.dumps(entry), flush=True)
         if validation["macro_f1"] > best_f1:
             best_f1 = validation["macro_f1"]
-            torch.save({
+            if not args.no_checkpoint:
+                torch.save({
                 "backbone": backbone.state_dict(),
                 "head": head.state_dict(),
                 "epoch": epoch,
                 "validation": validation,
-            }, checkpoint)
-            print(f"Saved best checkpoint: {checkpoint}", flush=True)
+                }, checkpoint)
+                print(f"Saved best checkpoint: {checkpoint}", flush=True)
         if args.max_train_steps and global_steps >= args.max_train_steps:
             break
 
@@ -215,6 +217,7 @@ def main():
         "status": "diagnostic_not_final" if args.max_train_steps else "full_training",
     }
     if not args.skip_test:
+        assert not args.no_checkpoint, "Final test requires a saved checkpoint"
         assert not args.max_train_steps, "Do not evaluate official test during diagnostic training"
         saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
         backbone.load_state_dict(saved["backbone"])
