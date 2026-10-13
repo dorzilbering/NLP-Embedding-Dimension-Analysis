@@ -79,7 +79,7 @@ def main():
         p for name, p in backbone.named_parameters()
         if id(p) not in embedding_ids and p.ndim >= 2
     )
-    before_embedding = embedding_param.detach().flatten()[:128].float().clone()
+    token_ids = encoded["input_ids"].unique()\n    before_embedding = embedding.table.weight.detach()[token_ids].float().clone() if isinstance(embedding, ReducedEmbedding) else embedding.weight.detach()[token_ids].float().clone()
     before_transformer = transformer_param.detach().flatten()[:128].float().clone()
 
     # SGD intentionally has no per-parameter optimizer state, unlike AdamW.
@@ -112,12 +112,12 @@ def main():
         "transformer_frozen": False, "loss": float(loss.item()),
         "embedding_gradient_norm": emb_norm,
         "transformer_gradient_norm": transformer_norm,
-        "embedding_weight_change_sample": float((embedding_param.detach().flatten()[:128].float() - before_embedding).abs().max()),
+        "embedding_weight_change_used_tokens": float(((embedding.table.weight if isinstance(embedding, ReducedEmbedding) else embedding.weight).detach()[token_ids].float() - before_embedding).abs().max()),
         "transformer_weight_change_sample": float((transformer_param.detach().flatten()[:128].float() - before_transformer).abs().max()),
         "peak_gpu_memory_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 2),
         "status": "single_step_smoke_test_not_final"
     }
-    print(json.dumps(result, indent=2), flush=True)
+    assert result["embedding_weight_change_used_tokens"] > 0, "Embedding weights of used tokens did not change"\n    print(json.dumps(result, indent=2), flush=True)
 
 
 if __name__ == "__main__":
