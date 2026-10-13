@@ -223,6 +223,9 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
         batches = 0
+        stopped_mid_epoch = False
+        resume_epoch_after_loop = epoch + 1
+        resume_batch_after_loop = 0
         for batch_index, (encoded, labels) in enumerate(train_loader):
             if epoch == start_epoch and batch_index < start_batch:
                 continue
@@ -244,6 +247,9 @@ def main():
                 if args.save_every and global_steps % args.save_every == 0:
                     save_resume(epoch if not last_batch else epoch + 1, batch_index + 1 if not last_batch else 0)
                 if args.max_train_steps and global_steps >= args.max_train_steps:
+                    stopped_mid_epoch = not last_batch
+                    resume_epoch_after_loop = epoch if stopped_mid_epoch else epoch + 1
+                    resume_batch_after_loop = batch_index + 1 if stopped_mid_epoch else 0
                     break
 
         validation = evaluate(val_loader)
@@ -261,7 +267,7 @@ def main():
                     "validation": validation,
                 }, checkpoint)
                 print(f"Saved best checkpoint: {checkpoint}", flush=True)
-        save_resume(epoch + 1, 0)
+        save_resume(resume_epoch_after_loop, resume_batch_after_loop)
         if args.max_train_steps and global_steps >= args.max_train_steps:
             break
 
