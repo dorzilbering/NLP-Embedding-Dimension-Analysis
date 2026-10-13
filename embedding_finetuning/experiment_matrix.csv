@@ -1,0 +1,7 @@
+model,checkpoint,native_dimension,embedding_dimension,condition,status
+Llama3.2-3B,meta-llama/Llama-3.2-3B-Instruct,3072,3072,native,not_started
+Llama3.2-3B,meta-llama/Llama-3.2-3B-Instruct,3072,1536,reduced,not_started
+Llama3.2-3B,meta-llama/Llama-3.2-3B-Instruct,3072,768,reduced,not_started
+Phi4-mini,microsoft/Phi-4-mini-instruct,3072,3072,native,not_started
+Phi4-mini,microsoft/Phi-4-mini-instruct,3072,1536,reduced,not_started
+Phi4-mini,microsoft/Phi-4-mini-instruct,3072,768,reduced,not_started
