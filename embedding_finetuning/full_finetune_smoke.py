@@ -118,7 +118,8 @@ def main():
         "peak_gpu_memory_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 2),
         "status": "single_step_smoke_test_not_final"
     }
-    assert result["embedding_weight_change_used_tokens"] > 0, "Embedding weights of used tokens did not change"\n    print(json.dumps(result, indent=2), flush=True)
+    assert result["embedding_weight_change_used_tokens"] > 0, "Embedding weights of used tokens did not change"
+    print(json.dumps(result, indent=2), flush=True)
 
 
 if __name__ == "__main__":
