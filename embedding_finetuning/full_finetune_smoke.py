@@ -79,7 +79,8 @@ def main():
         p for name, p in backbone.named_parameters()
         if id(p) not in embedding_ids and p.ndim >= 2
     )
-    token_ids = encoded["input_ids"].unique()\n    before_embedding = embedding.table.weight.detach()[token_ids].float().clone() if isinstance(embedding, ReducedEmbedding) else embedding.weight.detach()[token_ids].float().clone()
+    token_ids = encoded["input_ids"].unique()
+    before_embedding = embedding.table.weight.detach()[token_ids].float().clone() if isinstance(embedding, ReducedEmbedding) else embedding.weight.detach()[token_ids].float().clone()
     before_transformer = transformer_param.detach().flatten()[:128].float().clone()
 
     # SGD intentionally has no per-parameter optimizer state, unlike AdamW.
