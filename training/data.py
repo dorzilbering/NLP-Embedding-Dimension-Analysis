@@ -5,6 +5,26 @@ import math
 from pilot.task_data import fingerprint, text_key
 
 
+def eligible_training_rows(bundle):
+    """Exclude every test-text-matching train row from optimization AND validation.
+
+    The raw official bundle is never altered. Deterministic IDs and canonical
+    hashes record the test-text-informed exclusion separately from its source.
+    """
+    from pilot.banking77 import official_overlap_audit
+    audit = official_overlap_audit(bundle)
+    excluded = set(audit["excluded_train_ids"])
+    eligible = [row for row in bundle["train"] if row["id"] not in excluded]
+    if {text_key(r["text"]) for r in eligible} & {text_key(r["text"]) for r in bundle["evaluation"]}:
+        raise RuntimeError("Leakage remains after official Banking77 training exclusions.")
+    if {r["label"] for r in eligible} != {str(i) for i in range(77)}:
+        raise ValueError("Overlap exclusion removed a training class; review source.")
+    audit["eligible_train_hash"] = fingerprint(eligible)
+    audit["exclusion_applied"] = True
+    audit["applied_to"] = "optimization_and_internal_validation"
+    return eligible, audit
+
+
 def split_training_rows(rows, fraction=0.1, seed=42):
     """Keep duplicate canonical texts together; preserve every row and its order.
 

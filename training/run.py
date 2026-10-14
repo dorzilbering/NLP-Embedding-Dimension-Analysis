@@ -11,7 +11,7 @@ import time
 from pilot.banking77 import validate_official_bundle
 from pilot.task_data import fingerprint, load_bundle
 from .config import DIMENSIONS, MODEL_IDS, ExperimentConfig
-from .data import split_training_rows
+from .data import eligible_training_rows, split_training_rows
 
 
 def main(argv=None):
@@ -38,15 +38,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = ExperimentConfig(**{name: getattr(args, name) for name in ExperimentConfig.__dataclass_fields__})
     bundle = validate_official_bundle(load_bundle(args.data, "Banking77"))
+    eligible, exclusions = eligible_training_rows(bundle)
     train_rows, validation_rows, split = split_training_rows(
-        bundle["train"], config.validation_fraction, config.validation_seed)
+        eligible, config.validation_fraction, config.validation_seed)
     plan = {"config": config.to_dict(), "model_id": config.model_id, "task": "Banking77",
             "token_embedding_dimension": config.dimension, "transformer_hidden_dimension": 3072,
             "sentence_vector_dimension": 3072, "classes": 77, "bundle_hash": fingerprint(bundle),
-            "source": bundle["source"], "fit_source": bundle["fit_source"],
-            "protocol": "banking77-trainable-token-embedding-validation-macro-f1-v2",
+            "source": bundle["source"], "raw_fit_source": bundle["fit_source"],
+            "fit_source": {**bundle["fit_source"], "split_method":
+                           "Preserve raw official train rows; exclude canonical test-text matches in memory; "
+                           "then create grouped stratified internal validation from eligible train rows."},
+            "protocol": "banking77-trainable-token-embedding-excluded-overlap-validation-v3",
             "selection": "max validation macro-F1; exact ties keep earliest epoch; no full-train refit",
             "validation_split": split,
+            "training_exclusions": exclusions,
             "initialization": "pretrained_copy_or_uncentered_token_weight_truncated_svd",
             "representation": "last_valid_token_l2_normalized_plain_text_no_chat_no_added_eos"}
     if args.dry_run:
@@ -112,7 +117,7 @@ def main(argv=None):
     history, selection = fit_with_validation(
         model, train, validation, optimizer, config, device, args.output,
         {"dataset_revision": bundle["source"]["revision"], "train_hash": split["train_hash"],
-         "validation_hash": split["validation_hash"]}, scheduler)
+         "validation_hash": split["validation_hash"], "training_exclusions": exclusions}, scheduler)
     (args.output / "selection.json").write_text(json.dumps(selection, indent=2, allow_nan=False))
     # Optimizer state belongs to the final training epoch, not the restored best
     # checkpoint. It is never reused; release it before inference/checkpoint checks.
@@ -140,6 +145,7 @@ def main(argv=None):
     scores, predictions = evaluate(model, test, device)
     torch.cuda.synchronize()
     results = {"scores": scores, "history": history, "selection": selection,
+               "training_exclusions": exclusions,
                "frozen_backbone_unchanged": True,
                "final_frozen_hash": final_frozen, "final_embedding_hash": final_embedding_hash,
                "checkpoint_reload_verified": True, "seconds": time.perf_counter() - started,

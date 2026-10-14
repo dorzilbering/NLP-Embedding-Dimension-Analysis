@@ -71,6 +71,14 @@ def evaluate_bundle(bundle, plan, encode):
                 "pca": {"components": plan["pca_components"], "pre_normalize": True, "whiten": False,
                         "solver": "randomized", "native_centered": False},
                 "leakage_check": "canonical fit/evaluation text disjointness; provenance asserted by bundle author"}
+    if task == "Banking77" and bundle["source"]["dataset_id"] == "PolyAI/banking77":
+        from pilot.banking77 import official_overlap_audit
+        metadata["official_overlap_audit"] = official_overlap_audit(bundle)
+        metadata["overlap_handling"] = "legacy_pca_preserves_all_official_train_rows"
+        if metadata["official_overlap_audit"]["overlap_unique_text_count"]:
+            metadata["leakage_check"] = ("Known official Banking77 train/test text overlap audited; "
+                                       "legacy PCA/classifier retain all official training rows. "
+                                       "Filtered trainable-embedding results use a different fit protocol.")
     return rows, {"evaluation_ids": metadata["evaluation_ids"], "by_dimension": predictions}, metadata, pca
 
 

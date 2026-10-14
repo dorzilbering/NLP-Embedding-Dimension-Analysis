@@ -46,9 +46,13 @@ training flag enabled, with dropout modules disabled explicitly.
 
 ## Running later, after GPU verification
 
-Use the existing official Banking77 preparation command. Validation is reused
-without changes: full 10,003/3,080 splits, 77 labels, immutable revision, hashes,
-original row IDs/order, canonical text disjointness, and duplicate-label checks.
+Reuse the existing official Banking77 JSON as-is, including the Google Drive copy.
+Raw validation requires full 10,003/3,080 splits, 77 labels, immutable revision,
+hashes, original IDs/order and duplicate-label checks. The full official export
+explicitly permits the reported seven canonical train/test matches; other overlap
+counts fail. Unrelated datasets retain strict leakage rejection. If preparing a new
+export, the pinned official dataset loader uses `trust_remote_code=True` for both
+configuration discovery and loading; model loading still uses `False`.
 
 ```bash
 python -m training.run --model Phi4-mini \
@@ -72,7 +76,15 @@ Deterministic PyTorch algorithms, explicit cuBLAS workspace configuration and
 disabled TF32 are used; unsupported deterministic kernels fail rather than silently
 relaxing reproducibility. There is no automatic quantization or offload fallback.
 
-Validation uses only the official training split. Defaults are
+Before validation splitting, exclude every train row whose `text_key` matches any
+test text. This deterministic in-memory view never edits the raw JSON or test set.
+Policy `banking77-preserve-raw-exclude-overlapping-train-v1` records excluded IDs,
+counts, per-row and unique canonical-text SHA256 hashes, original split hashes and
+eligible-training hash under `training_exclusions`. Repeated matching train rows
+are all excluded, so the row count can exceed seven. No test label is consulted
+to decide exclusions. Abort if exclusion removes a class.
+
+Validation uses only the remaining eligible official training rows. Defaults are
 `--validation-fraction 0.1 --validation-seed 42`. Keep this validation seed fixed
 across both models, all dimensions, and all training seeds. Group duplicate
 canonical texts together, stratify by the 77 labels, and select a group subset
@@ -80,7 +92,8 @@ per class nearest its rounded target validation count. A deterministic subset-su
 algorithm achieves the target exactly when group sizes permit it; count ties
 prefer the smaller holdout. Seeded SHA256 ordering resolves equivalent subset
 choices. Record achieved per-class counts, exact IDs and partition hashes.
-Every official train row remains in exactly one partition, in original order.
+Every eligible train row remains in exactly one partition, in original order;
+excluded rows remain solely in the original raw bundle.
 Both partitions must contain every class. Unsplittable classes fail explicitly.
 
 Train only the resulting subtrain partition. Evaluate validation after each epoch
@@ -94,8 +107,14 @@ be the last epoch's weights. Validation evaluation uses no gradients or updates.
 The selection function accepts only train and validation loaders. The runner
 constructs the official test loader only after selection, weight restoration and
 reload verification finish; test is then scored once. Reading the source bundle
-for official integrity/leakage validation is separate from model selection: its
-test rows, labels, logits and scores never enter optimization or selection.
+for integrity and text-based decontamination precedes model selection. Test
+labels, logits and scores never guide exclusions, optimization or checkpoint selection.
+Test input texts **do** determine eligibility: this is a test-text-informed protocol,
+not a test-blind one. Document this dependency and changed training population.
+Legacy PCA keeps all official train rows and may retain overlap contamination;
+historical scores/outputs are preserved and are not a controlled baseline for the
+filtered supervised experiment. Canonical matching does not detect paraphrases,
+and the seven-count guard is not independent authentication of the actual texts.
 Do not tune settings from test scores.
 For the complete matrix run both models at 3072/1536/768, independently initialized.
 Repeat seeds 42/43/44 if reporting variability, with equal training exposure.
@@ -106,6 +125,7 @@ Repeat seeds 42/43/44 if reporting variability, with equal training exposure.
   dimensions, initialization error, parameter manifest, environment and precision.
   Includes the independent validation seed, achieved class counts, and exact
   training/validation membership and hashes.
+  Includes raw-data-preserving exclusions and canonical-text hashes.
 - `initialization.pt`, improving `epoch-NNN.pt`, and selected `final.pt`:
   adaptation-only weights and configuration;
   frozen transformer weights are reconstructed from the exact base SHA. Reload

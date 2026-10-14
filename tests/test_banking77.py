@@ -141,10 +141,12 @@ def test_preparation_mocked_download_and_immutable_revision(dataset, tmp_path, m
     def info(identifier, revision):
         calls.append(("resolve", identifier, revision))
         return SimpleNamespace(sha="a" * 40)
-    def configs(identifier, revision):
+    def configs(identifier, revision, trust_remote_code):
         assert revision == "a" * 40
+        assert identifier == "PolyAI/banking77" and trust_remote_code is True
         return ["fixture-config"]
-    def load(identifier, name, revision):
+    def load(identifier, name, revision, trust_remote_code):
+        assert trust_remote_code is True
         calls.append(("load", identifier, name, revision))
         return dataset
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=lambda: SimpleNamespace(dataset_info=info)))
@@ -152,6 +154,7 @@ def test_preparation_mocked_download_and_immutable_revision(dataset, tmp_path, m
     output = tmp_path / "bundle.json"
     prepare_banking77.main(["--output", str(output)])
     data = json.loads(output.read_text(encoding="utf-8"))
+    assert data["preparation"]["trust_remote_code"] is True
     validate_official_bundle(data)
     assert calls[-1] == ("load", "PolyAI/banking77", "fixture-config", "a" * 40)
     assert task_plan("Banking77", bundle=data)["executable"]

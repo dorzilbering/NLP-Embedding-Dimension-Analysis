@@ -50,6 +50,9 @@ models, a full benchmark sweep, and the final PDF report remain future work.
 - Reject canonical text overlap between fit and evaluation inputs, including all
   retrieval queries and corpus documents. Dataset provenance also requires human
   review: text checks cannot establish split authenticity or detect paraphrases.
+  Full official Banking77 is an explicit exception for its known seven overlapping
+  canonical texts: raw rows stay intact; the new trainable experiment excludes
+  matching training rows, while legacy PCA fitting remains unchanged and audited.
 
 ## Task protocols
 
@@ -185,12 +188,16 @@ contents. Do not set Hugging Face offline environment variables for the actual
 preparation command. Existing dependency files suffice; no new packages are added.
 
 Preparation checks exactly 10,003 train / 3,080 test rows, fields `text`/`label`,
-matching 77-class label definitions, label coverage, and train/test text separation.
+matching 77-class label definitions, label coverage, and explicit overlap policy.
 Texts and row order are preserved; split-prefixed IDs and content hashes are saved.
 Duplicate same-label training rows are retained for classification; PCA samples
-only distinct training texts. Normalized train/test overlap, conflicting duplicate
-training labels, or unexpected source structure **stops preparation** without silently
-filtering official rows. Such a failure requires review before running an experiment.
+only distinct training texts. The known seven canonical train/test matches are
+accepted only for a full structurally validated official export. Unexpected overlap
+counts, conflicting duplicate labels, or unexpected source structure stop preparation.
+No official rows are removed from export. Trainable embeddings exclude all matching
+train rows before creating validation; legacy PCA keeps its original fitting semantics.
+Dataset configuration discovery/loading uses `trust_remote_code=True` at the
+resolved immutable revision for the official scripted loader.
 The command never overwrites an existing bundle; bundles live under ignored `data/`.
 
 The runner accepts only the full official Banking77 contract, not arbitrary subsets

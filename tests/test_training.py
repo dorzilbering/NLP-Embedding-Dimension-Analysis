@@ -216,8 +216,9 @@ def test_full_checkpoint_cpu_loading_is_rejected():
         load_model(spec(), device="cpu")
 
 
-def test_dry_run_official_validation_without_scientific_imports(tmp_path):
-    data = synthetic_official_bundle()
+@pytest.mark.parametrize("overlap", [False, True])
+def test_dry_run_official_validation_without_scientific_imports(tmp_path, overlap):
+    data = synthetic_official_bundle(overlap)
     path = tmp_path / "data.json"
     path.write_text(json.dumps(data))
     output = tmp_path / "absent"
@@ -229,6 +230,8 @@ def test_dry_run_official_validation_without_scientific_imports(tmp_path):
     plan = json.loads(result.stdout)
     assert plan["token_embedding_dimension"] == 768
     assert plan["validation_split"]["source_split"] == "train"
+    assert plan["training_exclusions"]["excluded_train_row_count"] == (8 if overlap else 0)
+    assert plan["training_exclusions"]["overlap_unique_text_count"] == (7 if overlap else 0)
     assert not set(plan["validation_split"]["train_ids"]) & set(plan["validation_split"]["validation_ids"])
     assert not output.exists()
     data["source"]["split_hashes"]["test"] = "corrupted"
@@ -237,7 +240,7 @@ def test_dry_run_official_validation_without_scientific_imports(tmp_path):
     assert result.returncode != 0 and "hash mismatch" in result.stderr
 
 
-def synthetic_official_bundle():
+def synthetic_official_bundle(overlap=False):
     from pilot.banking77 import build_bundle
     from types import SimpleNamespace
     class Partition(list):
@@ -246,6 +249,10 @@ def synthetic_official_bundle():
     dataset = {split: Partition({"text": f"synthetic {split} row {i}", "label": i % 77}
                                for i in range(count))
                for split, count in (("train", 10003), ("test", 3080))}
+    if overlap:
+        for i in range(7):
+            dataset["test"][i]["text"] = "  " + dataset["train"][i]["text"].upper() + "  "
+        dataset["train"][100] = dict(dataset["train"][0])
     return build_bundle(dataset, "c" * 40, "synthetic")
 
 
@@ -399,7 +406,8 @@ def test_validation_evaluation_creates_no_parameter_gradients():
     assert all(p.grad is None for p in model.parameters())
 
 
-def test_runner_scores_test_only_after_finalized_selection(tmp_path, monkeypatch):
+@pytest.mark.parametrize("overlap", [False, True])
+def test_runner_scores_test_only_after_finalized_selection(tmp_path, monkeypatch, overlap):
     """Exercise CLI orchestration with injected tiny CPU weights and no training."""
     import training.model as model_module
     import training.selection as selection_module
@@ -430,8 +438,10 @@ def test_runner_scores_test_only_after_finalized_selection(tmp_path, monkeypatch
     events = []
     def fake_fit(model, train, validation, optimizer, config, device, output, provenance, scheduler):
         assert {row["id"] for row in train.dataset}.isdisjoint({row["id"] for row in validation.dataset})
-        assert len(train.dataset) + len(validation.dataset) == 10003
+        assert len(train.dataset) + len(validation.dataset) == (9995 if overlap else 10003)
         assert all(row["id"].startswith("train:") for row in train.dataset + validation.dataset)
+        excluded_ids = set(provenance["training_exclusions"]["excluded_train_ids"])
+        assert excluded_ids.isdisjoint({row["id"] for row in train.dataset + validation.dataset})
         assert "test" not in provenance
         with torch.no_grad():
             model.embeddings.lookup.weight[1].add_(0.1)
@@ -449,8 +459,14 @@ def test_runner_scores_test_only_after_finalized_selection(tmp_path, monkeypatch
     monkeypatch.setattr(selection_module, "fit_with_validation", fake_fit)
     monkeypatch.setattr(trainer_module, "evaluate", fake_test)
     data = tmp_path / "data.json"
-    data.write_text(json.dumps(synthetic_official_bundle()))
+    raw = synthetic_official_bundle(overlap)
+    data.write_text(json.dumps(raw))
+    original_bytes = data.read_bytes()
     main(["--model", "Phi4-mini", "--revision", "a" * 40, "--dimension", "768",
           "--data", str(data), "--output", str(output)])
     assert events == ["selection-finalized", "test-scored"]
     assert json.loads((output / "results.json").read_text())["selection"] == selected
+    assert data.read_bytes() == original_bytes
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["training_exclusions"]["excluded_train_row_count"] == (8 if overlap else 0)
+    assert manifest["test_ids"] == [row["id"] for row in raw["evaluation"]]

@@ -10,10 +10,10 @@ Reviewed against the lecturer's internal-token-embedding requirements.
 | Frozen backbone | Freeze before replacement; optimizer checks its exact parameter set. Tests and runtime hashes verify frozen weights. Gradient checkpointing remains differentiable. |
 | Pretrained initialization | Native copy; reduced uncentered truncated SVD of token weights, without task examples or sentence representations. Temporary initialization does not advance classifier RNG. |
 | Banking77 classification | 77-way linear classifier on normalized last-valid-token hidden state, supervised cross-entropy, accuracy and macro-F1. Reuses official source/split validation. |
-| Validation isolation | Derive stratified canonical-text-grouped partitions from official train rows only. All classes and rows retained. Separate validation seed and recorded IDs/hashes support shared splits across configurations. |
+| Validation isolation | Exclude test-text-matching train rows first, preserving the full raw export. Derive stratified grouped partitions from eligible train rows; retain all classes and eligible rows. Separate seed and IDs/hashes support shared splits. |
 | Model selection | Validation macro-F1 alone; earliest exact tie. Versioned improving checkpoints are restored before any test-model evaluation. Selection API accepts no test loader. |
 | Reproducibility and checkpoints | Immutable model/data provenance, seeded shuffle, deterministic algorithms, fixed optimization settings, initialization artifact, adaptation checkpoints and environment manifest. Reload checks and CPU tests verify logits. |
-| Preserve original experiments | No changes to `pilot/`, original runners, requirements or original tests; additions are under `training/` and a new test module. |
+| Preserve original experiments | Shared validation now explicitly accepts known full-official Banking77 overlap; future PCA metadata audits it. Historical PCA fitting semantics and existing artifacts remain unchanged. |
 
 The dimension here is the **internal token lookup dimension**. Transformer and
 sentence-vector widths remain 3072; the input projection does not shrink the
@@ -24,8 +24,10 @@ retained as a frozen lookup followed by a sentence-vector reducer.
 The validation extension corrects the prior fixed-final-epoch protocol. Training
 now excludes held-out validation rows, and `final.pt` exports the selected epoch
 rather than the last epoch. No full-train refit is performed. The official test
-bundle is inspected only for existing source/leakage validation before training;
-its model scores cannot influence checkpoint selection. Initialization depends
+bundle is inspected for integrity and test-text-informed training exclusions;
+its labels/scores do not decide exclusions or checkpoint selection. This is not
+a test-blind protocol and its reduced training population must be reported.
+All raw rows and test rows are unchanged. Initialization depends
 only on pretrained token weights, so validation text also does not fit the SVD.
 
 Remaining limitations: adaptation checkpoints do not include optimizer/RNG state

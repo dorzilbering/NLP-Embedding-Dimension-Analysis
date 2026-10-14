@@ -90,7 +90,13 @@ def validate_bundle(bundle, task):
     else:
         fit = _records(bundle.get("train"), "train/reference", labelled=task == "Banking77")
         evaluation = _records(bundle.get("evaluation"), "evaluation", labelled=True)
-        _no_overlap(fit, evaluation, allow_training_duplicates=task == "Banking77")
+        overlap = {text_key(r["text"]) for r in fit} & {text_key(r["text"]) for r in evaluation}
+        if (task == "Banking77" and overlap and source["dataset_id"] == "PolyAI/banking77"
+                and source["selection"] == "full"):
+            from pilot.banking77 import allow_known_official_overlap
+            allow_known_official_overlap(bundle)
+        else:
+            _no_overlap(fit, evaluation, allow_training_duplicates=task == "Banking77")
         if {r["id"] for r in fit} & {r["id"] for r in evaluation}:
             raise ValueError("Training and evaluation IDs must be distinct (qualify split-local IDs).")
         if len(evaluation) < 2:
