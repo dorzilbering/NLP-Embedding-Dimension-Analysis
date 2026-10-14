@@ -30,8 +30,13 @@ a test-blind protocol and its reduced training population must be reported.
 All raw rows and test rows are unchanged. Initialization depends
 only on pretrained token weights, so validation text also does not fit the SVD.
 
-Remaining limitations: adaptation checkpoints do not include optimizer/RNG state
-for resume; deterministic results across different BLAS/CUDA releases are not
+Crash recovery now uses atomic, checksummed resume snapshots including optimizer,
+scheduler, RNG, batch cursor, partial metrics and validation selection state.
+Adaptation-only artifacts remain separate. Resume verifies run/config/data identity
+and rebuilds only owned journals under a process lock. Tiny CPU tests demonstrate
+exact continuation after optimizer-boundary and mid-accumulation interruptions.
+Remaining limitations: persistent filesystem semantics and large snapshot I/O
+require Colab verification; deterministic results across different BLAS/CUDA releases are not
 guaranteed; per-step update evidence samples observed rows rather than claiming
 all vocabulary rows change. Improving checkpoint versions and native-size token
 tables require significant disk, host RAM, optimizer VRAM and activation VRAM.

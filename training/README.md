@@ -66,7 +66,8 @@ the plan; it neither downloads models nor creates output directories. Removing
 `--dry-run` opts into real training and requires BF16-capable CUDA hardware.
 For Llama, use `--model Llama3.2-3B` with a resolved SHA for the base checkpoint.
 Use a fresh output directory per configuration and seed. Existing directories
-and checkpoint files are rejected rather than overwritten.
+are rejected for new runs; `--resume` explicitly reuses the verified original run.
+Checkpoint files are immutable and never overwritten.
 
 Defaults: training seed 42, five maximum epochs, microbatch 1, accumulation 32, maximum length
 256, lookup/projection LR 1e-4, classifier LR 1e-3, 10% linear warmup, linear decay,
@@ -141,12 +142,106 @@ Repeat seeds 42/43/44 if reporting variability, with equal training exposure.
   elapsed time and peak allocated CUDA memory.
 - `selection.json`: finalized validation selection, written before any test scoring,
   so selected epoch/score remain reviewable even if test evaluation fails.
+- `resume-STEP-PHASE-TIMESTAMP-ID.pt` plus `.sha256`: complete training snapshots,
+  including adaptation, optimizer/scheduler, epoch/global step, completed batch
+  cursor, partial epoch metrics, selection history, experiment/run/data identity,
+  Python/NumPy/torch/CUDA RNG and loader-generator state. Phase 1 follows completed
+  validation; phase 0 is initialization or an optimizer-boundary snapshot.
 
-Checkpoints are for inference/review, **not resumable optimizer snapshots**.
-Resume support (optimizer/scheduler/RNG/shuffle state) is outside Phase 1.
+`initialization.pt`, `epoch-*.pt` and `final*.pt` remain adaptation-only artifacts.
+Training recovery uses the new `resume-*.pt` snapshots, not those inference files.
 The initialization checkpoint is essential evidence: factorization alone changes
 weights, whereas gradients and post-optimizer deltas establish actual training.
-Interrupted runs retain their partial output directory and must use a new path.
+
+## Crash recovery: exact commands
+
+Start a new Phi run (these settings must stay identical on resume):
+
+```bash
+python -m training.run --model Phi4-mini \
+  --revision cfbefacb99257ffa30c83adab238a50856ac3083 \
+  --dimension 768 --data data/banking77_official.json \
+  --output results/trainable_phi_768_seed42 \
+  --seed 42 --epochs 5 --batch-size 1 --accumulation-steps 32 \
+  --max-length 256 --validation-seed 42 --validation-fraction 0.1 \
+  --checkpoint-every-steps 50
+```
+
+After an interruption, keep that output directory and raw dataset intact and run:
+
+```bash
+python -m training.run --model Phi4-mini \
+  --revision cfbefacb99257ffa30c83adab238a50856ac3083 \
+  --dimension 768 --data data/banking77_official.json \
+  --output results/trainable_phi_768_seed42 \
+  --seed 42 --epochs 5 --batch-size 1 --accumulation-steps 32 \
+  --max-length 256 --validation-seed 42 --validation-fraction 0.1 \
+  --checkpoint-every-steps 50 --resume
+```
+
+For any model/dimension, including Llama with its recorded immutable revision,
+the exact original configuration can also be read from the manifest, avoiding
+manual transcription (set `run_dir` and `dataset_path` to your existing files):
+
+```python
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+run_dir = Path("results/trainable_phi_768_seed42")
+dataset_path = Path("data/banking77_official.json")
+config = json.loads((run_dir / "manifest.json").read_text())["config"]
+command = [sys.executable, "-m", "training.run", "--data", str(dataset_path),
+           "--output", str(run_dir), "--resume"]
+for name, value in config.items():
+    flag = "--" + name.replace("_", "-")
+    if isinstance(value, bool):
+        if value:
+            command.append(flag)
+    else:
+        command.extend([flag, str(value)])
+subprocess.run(command, check=True)
+```
+
+Snapshots are saved before the first optimizer step, every 50 optimizer steps by
+default (configurable for a new run), and after every validation epoch. Saving
+occurs only after a complete accumulation window. On a disconnect, roll back to
+the latest valid snapshot and replay unsaved windows, including a partly computed
+window. Epoch-seeded shuffling recreates the sample order with `num_workers=0`;
+completed batches are skipped without advancing restored model RNG. Validation
+selection resumes from its saved history and best checkpoint. Official test data
+still enters model evaluation only after selection is finalized.
+
+`--resume` checks the exact configuration, raw bundle hash, eligible/subtrain/
+validation hashes, protocol, run ID, dependency versions, frozen backbone and
+precision before continuing. It will not extend the epoch budget or change batch
+size, seed, checkpoint interval, data, or other experiment settings. A missing or
+corrupted newest checkpoint/sidecar is ignored in favor of an older valid snapshot;
+a valid foreign checkpoint is an error, not a silent fallback. Old runs without
+resume snapshots are not resumable. A completed run returns its saved scores
+without retraining or scoring test again. If scoring was interrupted before its
+atomic results commit, recovery may repeat final scoring with the already-fixed
+selected model; test scores never feed back into selection.
+
+All writes use same-directory temporary files, flush/fsync, and atomic rename.
+SHA256 sidecars detect incomplete or corrupted snapshots. A POSIX process lock
+prevents simultaneous writers and is automatically released after process death.
+Checkpoint versions and the original manifest/initialization are preserved.
+Only owned journals (`training_metrics.jsonl`, `selection.json`) are atomically
+rebuilt on recovery; epoch history comes from the checkpoint to avoid duplicates.
+If `final.pt` already exists after an interrupted finalization, write a new
+`final-ID.pt`; `results.json.final_checkpoint` identifies the completed artifact.
+
+Use persistent storage that supports atomic rename, file/directory fsync and POSIX
+locking. Colab's temporary `/content` storage does not survive runtime deletion.
+Google Drive/FUSE persistence and sync semantics must be smoke-tested; a local
+atomic rename does not guarantee that a remote Drive upload has finished. Copies
+of a run must include manifest, resume snapshots/sidecars, and referenced best
+checkpoints/sidecars. Do not copy partially synced files into a different run.
+Snapshots include very large Adam state and all versions are retained: budget
+disk space, host RAM and checkpoint I/O for native-width vocabulary tables before
+an A100 run. No automatic pruning or cross-environment bitwise guarantee is claimed.
 
 ## CPU validation and A100 follow-up
 
@@ -159,6 +254,10 @@ Additional tests cover deterministic stratification, grouped duplicate isolation
 training/test separation, preserved rows, class coverage, invalid splits,
 macro-F1-only selection and ties, restoration of an earlier best checkpoint,
 validation without parameter updates, and untouched validation-only lookup rows.
+`python -m pytest tests/test_resume.py` covers optimizer/scheduler/RNG equality
+after mid-window and mid-epoch crashes, corrupt-checkpoint fallback, configuration
+and dataset mismatch rejection, atomic-write failure, process locking, and CLI
+recovery after training or finalization interruptions without clobbering artifacts.
 
 Still verify on an A100 before full experiments: exact pinned checkpoint configs
 and tokenizer behavior, authorized Llama access, BF16/SDPA gradient flow and padding

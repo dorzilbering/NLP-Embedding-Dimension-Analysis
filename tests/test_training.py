@@ -436,7 +436,7 @@ def test_runner_scores_test_only_after_finalized_selection(tmp_path, monkeypatch
     output = tmp_path / "run"
     selected = {"best_epoch": 2, "best_score": 0.8, "metric": "validation_macro_f1"}
     events = []
-    def fake_fit(model, train, validation, optimizer, config, device, output, provenance, scheduler):
+    def fake_fit(model, train, validation, optimizer, config, device, output, provenance, scheduler, **kwargs):
         assert {row["id"] for row in train.dataset}.isdisjoint({row["id"] for row in validation.dataset})
         assert len(train.dataset) + len(validation.dataset) == (9995 if overlap else 10003)
         assert all(row["id"].startswith("train:") for row in train.dataset + validation.dataset)

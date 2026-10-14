@@ -27,6 +27,7 @@ class ExperimentConfig:
     gradient_checkpointing: bool = False
     validation_fraction: float = 0.1
     validation_seed: int = 42
+    checkpoint_every_steps: int = 50
 
     def __post_init__(self):
         if self.model not in MODEL_IDS:
@@ -35,7 +36,7 @@ class ExperimentConfig:
             raise ValueError("Provide an immutable lowercase 40-character model commit SHA.")
         if type(self.dimension) is not int or self.dimension not in DIMENSIONS:
             raise ValueError("Internal token dimension must be 3072, 1536, or 768.")
-        for name in ("epochs", "batch_size", "accumulation_steps", "max_length"):
+        for name in ("epochs", "batch_size", "accumulation_steps", "max_length", "checkpoint_every_steps"):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} must be a positive integer.")

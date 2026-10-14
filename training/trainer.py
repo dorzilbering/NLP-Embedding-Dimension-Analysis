@@ -2,6 +2,7 @@
 import hashlib
 from itertools import islice
 import random
+import numpy as np
 
 import torch
 from torch.nn import functional as F
@@ -9,6 +10,7 @@ from torch.nn import functional as F
 
 def seed_everything(seed):
     random.seed(seed)
+    np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -47,12 +49,29 @@ def frozen_hash(model):
 
 
 def train_epoch(model, batches, optimizer, device, accumulation_steps=1,
-                max_grad_norm=1.0, scheduler=None):
+                max_grad_norm=1.0, scheduler=None, *, resume_state=None, on_step=None):
     """Scale by actual window examples, including short final batches/windows."""
     model.train()
     total_loss, correct, count, steps = 0.0, 0, 0, 0
     evidence = None
+    consumed_batches = 0
+    if resume_state is not None:
+        total_loss, correct, count, steps = (resume_state[key] for key in
+                                           ("total_loss", "correct", "count", "steps"))
+        evidence = resume_state["evidence"]
+        consumed_batches = resume_state["consumed_batches"]
+    # Reconstruct deterministic epoch order and skip completed accumulation
+    # windows. Iterator construction/collation must not advance resumed RNG.
+    from .checkpoint import capture_rng, restore_rng
+    rng = capture_rng() if resume_state is not None else None
     iterator = iter(batches)
+    for _ in range(consumed_batches):
+        try:
+            next(iterator)
+        except StopIteration as error:
+            raise ValueError("Resume batch cursor exceeds epoch length.") from error
+    if rng is not None:
+        restore_rng(rng)
     while window := list(islice(iterator, accumulation_steps)):
         window_count = sum(batch["labels"].numel() for batch in window)
         optimizer.zero_grad(set_to_none=True)
@@ -94,6 +113,7 @@ def train_epoch(model, batches, optimizer, device, accumulation_steps=1,
         if scheduler is not None:
             scheduler.step()
         steps += 1
+        consumed_batches += len(window)
         if evidence is None:
             delta = model.embeddings.lookup.weight.detach()[ids].cpu() - before
             if not delta.abs().any():
@@ -107,6 +127,9 @@ def train_epoch(model, batches, optimizer, device, accumulation_steps=1,
                         "sample_delta_norm": delta.norm().item(), "sample_max_abs_delta": delta.abs().max().item(),
                         "projection_gradient_norm": projection_gradient,
                         "projection_delta_norm": projection_delta}
+        if on_step is not None:
+            on_step({"total_loss": total_loss, "correct": correct, "count": count,
+                     "steps": steps, "evidence": evidence, "consumed_batches": consumed_batches})
     if not count:
         raise ValueError("Empty training loader.")
     return {"loss": total_loss / count, "accuracy": correct / count,

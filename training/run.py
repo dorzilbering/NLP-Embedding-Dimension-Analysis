@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import time
+import uuid
 
 from pilot.banking77 import validate_official_bundle
 from pilot.task_data import fingerprint, load_bundle
@@ -35,6 +36,9 @@ def main(argv=None):
     parser.add_argument("--validation-seed", type=int, default=42,
                         help="Keep this fixed across models, dimensions and training seeds.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--checkpoint-every-steps", type=int, default=50)
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume the latest valid training checkpoint in --output.")
     args = parser.parse_args(argv)
     config = ExperimentConfig(**{name: getattr(args, name) for name in ExperimentConfig.__dataclass_fields__})
     bundle = validate_official_bundle(load_bundle(args.data, "Banking77"))
@@ -57,17 +61,57 @@ def main(argv=None):
     if args.dry_run:
         print(json.dumps(plan, indent=2))
         return
-    if args.output.exists():
-        raise ValueError("Output exists; choose a fresh run directory.")
-    # Must precede importing torch / CUDA initialization for deterministic GEMMs.
+    return execute(args, config, bundle, train_rows, validation_rows, plan)
+
+
+def execute(args, config, bundle, train_rows, validation_rows, plan):
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    from .checkpoint import run_lock
+    if args.resume:
+        if not args.output.is_dir():
+            raise ValueError("Resume requires the existing run directory in --output.")
+    else:
+        args.output.mkdir(parents=True, exist_ok=False)
+    with run_lock(args.output):
+        return execute_locked(args, config, bundle, train_rows, validation_rows, plan)
+
+
+def execute_locked(args, config, bundle, train_rows, validation_rows, plan):
+    from .checkpoint import atomic_json
+    split, exclusions = plan["validation_split"], plan["training_exclusions"]
+    data_identity = {"bundle_hash": plan["bundle_hash"], "train_hash": split["train_hash"],
+                     "validation_hash": split["validation_hash"],
+                     "eligible_train_hash": exclusions["eligible_train_hash"],
+                     "protocol": plan["protocol"], "data_order": "epoch_seeded_shuffle_v1"}
+    stored = None
+    if args.resume:
+        stored = json.loads((args.output / "manifest.json").read_text())
+        if stored.get("config") != config.to_dict():
+            raise ValueError("Resume experiment configuration mismatch.")
+        identity = stored.get("resume_identity", {})
+        if identity.get("data") != data_identity or not identity.get("run_id"):
+            raise ValueError("Resume run identity/dataset hashes mismatch.")
+        results_path = args.output / "results.json"
+        if results_path.exists():
+            completed = json.loads(results_path.read_text())
+            if completed.get("run_id") != identity["run_id"]:
+                raise ValueError("Results belong to a different run.")
+            print(json.dumps({"output": str(args.output.resolve()), "scores": completed["scores"],
+                              "already_complete": True}, indent=2))
+            return
+    # execute() configured deterministic GEMMs before importing checkpoint/torch.
     import torch
     from torch.utils.data import DataLoader
     from .model import load_model
-    from .checkpoint import save_checkpoint, load_checkpoint
+    from .checkpoint import save_checkpoint, load_checkpoint, latest_resume_checkpoint
     from .trainer import seed_everything, make_optimizer, evaluate, frozen_hash, parameter_hash
     from .selection import fit_with_validation
     seed_everything(config.seed)
+    packages = {name: importlib.metadata.version(name) for name in
+                ("torch", "transformers", "accelerate", "safetensors", "huggingface-hub")}
+    if stored is not None and stored["packages"] != packages:
+        raise ValueError("Resume dependency versions differ from the original run.")
+    resume_payload = latest_resume_checkpoint(args.output, config, identity) if stored is not None else None
     started = time.perf_counter()
     model, tokenizer = load_model(config)
     device = "cuda"
@@ -82,7 +126,8 @@ def main(argv=None):
     train = DataLoader(train_rows, batch_size=config.batch_size, shuffle=True,
                        generator=generator, collate_fn=collate, num_workers=0)
     validation = DataLoader(validation_rows, batch_size=config.batch_size, shuffle=False,
-                            collate_fn=collate, num_workers=0)
+                            collate_fn=collate, num_workers=0,
+                            generator=torch.Generator().manual_seed(config.validation_seed))
     optimizer = make_optimizer(model, config)
     total_steps = config.epochs * math.ceil(len(train) / config.accumulation_steps)
     # Start with a positive LR so the first-step update assertion is meaningful.
@@ -95,14 +140,22 @@ def main(argv=None):
     scheduler = LambdaLR(optimizer, lr_factor)
     baseline_frozen = frozen_hash(model)
     initial_embedding_hash = parameter_hash(model.embeddings.named_parameters())
+    if stored is not None:
+        if (baseline_frozen != stored["frozen_backbone_initial_hash"] or
+                str(model.backbone_dtype) != stored["backbone_dtype"] or
+                os.environ["CUBLAS_WORKSPACE_CONFIG"] != stored["cublas_workspace_config"]):
+            raise ValueError("Resume backbone/precision/runtime mismatch.")
+        initial_embedding_hash = stored["initial_embedding_hash"]
+    else:
+        identity = {"run_id": uuid.uuid4().hex, "data": data_identity,
+                    "frozen_backbone_hash": baseline_frozen}
     plan.update(trainable_parameters=model.trainable_manifest(), initialization=model.embeddings.initialization,
                 backbone_config=model.backbone.config.to_dict(),
                 tokenizer={"class": type(tokenizer).__name__, "vocab_size": len(tokenizer),
                            "pad_token_id": tokenizer.pad_token_id, "eos_token_id": tokenizer.eos_token_id,
                            "padding_side": tokenizer.padding_side},
                 frozen_backbone_initial_hash=baseline_frozen, initial_embedding_hash=initial_embedding_hash,
-                packages={name: importlib.metadata.version(name) for name in
-                          ("torch", "transformers", "accelerate", "safetensors", "huggingface-hub")},
+                packages=packages, resume_identity=identity,
                 python=platform.python_version(), gpu=torch.cuda.get_device_name(),
                 cuda=torch.version.cuda, backbone_dtype=str(model.backbone_dtype), trainable_dtype="float32",
                 effective_batch_size=config.batch_size * config.accumulation_steps,
@@ -111,14 +164,15 @@ def main(argv=None):
                 train_ids=[row["id"] for row in train_rows],
                 validation_ids=[row["id"] for row in validation_rows],
                 test_ids=[row["id"] for row in bundle["evaluation"]])
-    args.output.mkdir(parents=True, exist_ok=False)
-    save_checkpoint(args.output / "initialization.pt", model, config, {"bundle_hash": plan["bundle_hash"]})
-    (args.output / "manifest.json").write_text(json.dumps(plan, indent=2, allow_nan=False))
+    if stored is None:
+        atomic_json(args.output / "manifest.json", plan)
+        save_checkpoint(args.output / "initialization.pt", model, config, {"bundle_hash": plan["bundle_hash"]})
     history, selection = fit_with_validation(
         model, train, validation, optimizer, config, device, args.output,
         {"dataset_revision": bundle["source"]["revision"], "train_hash": split["train_hash"],
-         "validation_hash": split["validation_hash"], "training_exclusions": exclusions}, scheduler)
-    (args.output / "selection.json").write_text(json.dumps(selection, indent=2, allow_nan=False))
+         "validation_hash": split["validation_hash"], "training_exclusions": exclusions}, scheduler,
+        identity=identity, resume_payload=resume_payload)
+    atomic_json(args.output / "selection.json", selection, replace=args.resume)
     # Optimizer state belongs to the final training epoch, not the restored best
     # checkpoint. It is never reused; release it before inference/checkpoint checks.
     del optimizer, scheduler
@@ -126,7 +180,10 @@ def main(argv=None):
     final_embedding_hash = parameter_hash(model.embeddings.named_parameters())
     if baseline_frozen != final_frozen or initial_embedding_hash == final_embedding_hash:
         raise RuntimeError("Frozen integrity or trained embedding hash check failed.")
-    save_checkpoint(args.output / "final.pt", model, config,
+    final_path = args.output / "final.pt"
+    if final_path.exists():
+        final_path = args.output / f"final-{uuid.uuid4().hex}.pt"
+    save_checkpoint(final_path, model, config,
                     {"bundle_hash": plan["bundle_hash"], "epochs_completed": config.epochs,
                      "selection": selection})
     # Reload into the existing wrapper; the exact pinned frozen backbone is
@@ -134,7 +191,7 @@ def main(argv=None):
     verification_batch = {k: v.to(device) for k, v in next(iter(validation)).items()}
     with torch.no_grad():
         before = model(**verification_batch)["logits"].clone()
-    load_checkpoint(args.output / "final.pt", model, config)
+    load_checkpoint(final_path, model, config)
     with torch.no_grad():
         after = model(**verification_batch)["logits"]
     torch.testing.assert_close(before, after, rtol=1e-5, atol=1e-6)
@@ -145,6 +202,7 @@ def main(argv=None):
     scores, predictions = evaluate(model, test, device)
     torch.cuda.synchronize()
     results = {"scores": scores, "history": history, "selection": selection,
+               "run_id": identity["run_id"], "final_checkpoint": final_path.name,
                "training_exclusions": exclusions,
                "frozen_backbone_unchanged": True,
                "final_frozen_hash": final_frozen, "final_embedding_hash": final_embedding_hash,
@@ -152,7 +210,7 @@ def main(argv=None):
                "peak_allocated_vram_bytes": torch.cuda.max_memory_allocated(),
                "predictions": [{"id": row["id"], "label": int(row["label"]), "prediction": pred}
                                for row, pred in zip(bundle["evaluation"], predictions)]}
-    (args.output / "results.json").write_text(json.dumps(results, indent=2, allow_nan=False))
+    atomic_json(args.output / "results.json", results)
     print(json.dumps({"output": str(args.output.resolve()), "scores": scores}, indent=2))
 
 
