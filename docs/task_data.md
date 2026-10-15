@@ -34,7 +34,7 @@ test set into training and testing and call that the official benchmark**. Prefe
 an independent reference source when there is no official train split. Record the
 original source and split procedure so the custom protocol is auditable.
 
-The loader validates declarations and text disjointness, not their authenticity.
+The loader validates declarations and the dataset-specific overlap policy, not authenticity.
 Review the original dataset documentation and immutable source before execution.
 Keep the exact bundle beside backed-up outputs; results contain its SHA-256 hash.
 Use `data/` (Git-ignored) for bundles. Do not put credentials in provenance fields.
@@ -51,11 +51,15 @@ max length. Preserve deterministic row ordering.
 SciFact/arXiv fit/reference texts must be deduplicated after Unicode NFKC, case
 folding and whitespace normalization. Banking77 preserves official training rows;
 same-label duplicates remain in classifier training but are deduplicated for PCA
-sampling only. Conflicting labels for duplicate training texts cause an error. Any normalized match with supplied evaluation texts
-causes an error. For SciFact/arXiv resolve overlaps in the **fitting** partition before export and
+sampling only. Conflicting labels for duplicate training texts cause an error.
+Normalized matches with supplied evaluation texts cause errors for unrelated sources.
+For SciFact/arXiv resolve overlaps in the **fitting** partition before export and
 record exclusions; never silently remove evaluation examples to improve scores.
-For Banking77 any overlap stops preparation: do not remove official train or test
-rows without separately agreeing a revised protocol.
+The full official Banking77 export explicitly permits the reported seven unique
+canonical train/test matches after all official integrity checks; unexpected counts
+fail. Zero-overlap exports remain accepted. No raw train or test rows are removed.
+The trainable embedding path excludes matching train rows from fitting and internal
+validation; the historical PCA path preserves all train rows and audits overlap.
 Where other official held-out splits exist, exclude their texts from fitting during
 preparation too. The runner can only check texts present in the supplied bundle.
 Review labels when deduplicating training examples; conflicting labels require an
@@ -82,8 +86,10 @@ The preparation command resolves the requested `--revision` (default `main`) to 
 40-character immutable commit SHA **before** discovering configuration or loading
 splits. If exactly one configuration exists it records that name; otherwise it
 requires `--configuration` explicitly. A reproduction uses the recorded SHA with
-`--revision` and a fresh output file. It does not load remote dataset scripts with
-`trust_remote_code`, change dependencies, or switch dataset sources as a fallback.
+`--revision` and a fresh output file. Configuration discovery and loading explicitly
+use `trust_remote_code=True` for the pinned official Banking77 script. This permits
+execution of that dataset loader code; the permission is recorded in preparation
+metadata. It does not change dependencies or switch dataset sources as a fallback.
 A loader/source incompatibility must be reviewed if encountered.
 
 Export collections are `train` and `evaluation` (the latter is the official test).
@@ -95,18 +101,44 @@ official label names, counts, unique training text count and split content hashe
 Preparation package versions are retained in the bundle.
 
 Validation checks exact counts/schema, matching 77-class label definitions, all
-label IDs 0..76, row order/IDs, hashes and canonical train/test text disjointness.
+label IDs 0..76, row order/IDs, hashes and the official seven-text overlap exception.
 The production runner rejects subsets, validation evaluation, wrong source IDs,
 unresolved revisions, missing classes, or altered hashed data. Hashes establish
 bundle consistency, not independent proof of source authenticity. Keep the exact
 export and revision with future results.
 
 No rows are silently dropped: same-label training duplicates remain in classifier
-training; only PCA calibration candidates are deduplicated. Cross-split text overlap
-or conflicting duplicate training labels abort preparation and require review.
+training in the legacy PCA path; only PCA calibration candidates are deduplicated.
+Unexpected cross-split overlap or conflicting duplicate labels abort preparation.
 The official train/test protocol must not be silently changed to make validation
 pass. Existing bundles are never overwritten. Real-data preparation and GPU
 execution have **not** been performed in this update.
+
+### Trainable embeddings: test-text-informed exclusion
+
+Policy `banking77-preserve-raw-exclude-overlapping-train-v1` uses Unicode NFKC,
+casefolding and collapsed whitespace (`text_key`) to match train texts against
+official test texts. Every matching training row is excluded, including all
+same-text duplicates, so excluded row count can exceed the seven unique matches.
+The raw bundle and its full split hashes remain unchanged. Exclusions are an
+in-memory view, applied before the train-only stratified validation split.
+All 3,080 test rows remain in their original order for final scoring.
+
+The experiment records excluded IDs in original order, per-row canonical-text
+SHA256, unique overlapping text hashes, raw/eligible counts, original split hashes,
+eligible-training hash, and the policy/canonicalization version. Manifest, results
+and selection-checkpoint provenance carry this audit. Existing Google Drive data
+and experiment artifacts need no migration or rewriting.
+
+This is **test-text-informed decontamination**, not a test-blind training protocol.
+Test labels, predictions and scores do not determine exclusions or select weights,
+but test input texts determine training eligibility. Disclose this dependency and
+the smaller fit population in the report. Legacy PCA scores retain potential
+overlap contamination and cannot be treated as a controlled comparison with the
+filtered supervised experiment. No historical output is recomputed or rewritten.
+Count checks and self-declared hashes do not prove authenticity or identify the
+seven expected strings; review actual hashes against the immutable source before
+GPU runs. Paraphrases and other semantic duplicates are not detected by this rule.
 
 ## SciFact
 

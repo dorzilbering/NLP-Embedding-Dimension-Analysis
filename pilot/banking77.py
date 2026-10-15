@@ -1,4 +1,5 @@
 """Official Banking77 export contract; all validation is offline and stdlib-only."""
+import hashlib
 import re
 
 from pilot.task_data import fingerprint, text_key, validate_bundle
@@ -6,10 +7,18 @@ from pilot.task_data import fingerprint, text_key, validate_bundle
 DATASET_ID = "PolyAI/banking77"
 SPLIT_COUNTS = {"train": 10003, "test": 3080}
 NUM_CLASSES = 77
+KNOWN_OVERLAP_TEXTS = 7
+OVERLAP_POLICY = "banking77-preserve-raw-exclude-overlapping-train-v1"
 
 
 def validate_official_bundle(bundle):
     validate_bundle(bundle, "Banking77")
+    _validate_official_structure(bundle)
+    return bundle
+
+
+def _validate_official_structure(bundle):
+    """Full raw-data contract, without recursively calling the generic validator."""
     source, fit = bundle["source"], bundle["fit_source"]
     if (source["dataset_id"] != DATASET_ID or source["selection"] != "full"
             or source["evaluation_split"] != "test" or source["text_format"] != "text_verbatim"
@@ -31,7 +40,41 @@ def validate_official_bundle(bundle):
             raise ValueError("Expected all 77 numeric label IDs in each official split.")
         if source.get("split_hashes", {}).get(split) != fingerprint(rows):
             raise ValueError("Official split content hash mismatch.")
-    return bundle
+
+
+def allow_known_official_overlap(bundle):
+    """Narrow exception for raw official Banking77; fitting policy is separate.
+
+    Counts/hashes establish consistency, not dataset authenticity. Unexpected
+    overlap counts fail; the seven actual text hashes are exported for review.
+    """
+    _validate_official_structure(bundle)
+    overlap = {text_key(r["text"]) for r in bundle["train"]} & {
+        text_key(r["text"]) for r in bundle["evaluation"]}
+    if len(overlap) != KNOWN_OVERLAP_TEXTS:
+        raise ValueError(f"Unexpected official Banking77 overlap: {len(overlap)} unique canonical texts; "
+                         f"expected {KNOWN_OVERLAP_TEXTS}. Review source; do not silently relax the policy.")
+
+
+def official_overlap_audit(bundle):
+    """Read-only audit; test labels never determine exclusions."""
+    validate_official_bundle(bundle)
+    test_keys = {text_key(r["text"]) for r in bundle["evaluation"]}
+    excluded = [r for r in bundle["train"] if text_key(r["text"]) in test_keys]
+    def canonical_hash(row):
+        return hashlib.sha256(text_key(row["text"]).encode("utf-8")).hexdigest()
+    return {"policy": OVERLAP_POLICY, "canonicalization": "NFKC-casefold-whitespace-v1",
+            "exclusion_applied": False,
+            "hash_algorithm": "sha256(canonical_text_utf8)",
+            "raw_train_count": len(bundle["train"]), "raw_test_count": len(bundle["evaluation"]),
+            "raw_split_hashes": dict(bundle["source"]["split_hashes"]),
+            "overlap_unique_text_count": len({text_key(r["text"]) for r in excluded}),
+            "excluded_train_row_count": len(excluded),
+            "eligible_train_row_count": len(bundle["train"]) - len(excluded),
+            "excluded_train_ids": [r["id"] for r in excluded],
+            "excluded_train_rows": [{"id": r["id"], "canonical_text_sha256": canonical_hash(r)} for r in excluded],
+            "overlap_text_sha256": sorted({canonical_hash(r) for r in excluded}),
+            "test_text_used_for_exclusions": True, "test_labels_used_for_exclusions": False}
 
 
 def build_bundle(dataset, revision, configuration):
