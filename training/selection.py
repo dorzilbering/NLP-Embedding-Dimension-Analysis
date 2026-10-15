@@ -1,6 +1,7 @@
 """Training and checkpoint selection have no official test-loader interface."""
 import json
 import math
+import time
 from pathlib import Path
 import uuid
 
@@ -39,6 +40,11 @@ def fit_with_validation(model, train_batches, validation_batches, optimizer, con
     function has finalized selection. No full-train refit is performed.
     """
     output = Path(output)
+    started_at = time.monotonic()
+    steps_per_epoch = math.ceil(len(train_batches) / config.accumulation_steps)
+    total_steps = steps_per_epoch * config.epochs
+    def report(message):
+        print(message, flush=True)
     selector, history, best_path = MacroF1Selector(), [], None
     epoch, global_step, partial = 1, 0, None
     if resume_payload is not None:
@@ -64,6 +70,8 @@ def fit_with_validation(model, train_batches, validation_batches, optimizer, con
     if identity is not None and resume_payload is None:
         save_resume_checkpoint(output, model, optimizer, scheduler, config, identity, progress_state(1, None))
     journal()
+    session_start_step = global_step
+    report(f"Training started/resumed: epoch {epoch}/{config.epochs}, step {global_step}/{total_steps}")
     for epoch in range(epoch, config.epochs + 1):
         # Dedicated generator and epoch seed recreate the same permutation after
         # a crash without using model RNG or consuming previous epochs again.
@@ -72,12 +80,20 @@ def fit_with_validation(model, train_batches, validation_batches, optimizer, con
             generator.manual_seed(config.seed + epoch)
         prior_steps = partial["steps"] if partial else 0
         epoch_start_step = global_step - prior_steps
+        report(f"Epoch {epoch}/{config.epochs} started (global step {global_step}/{total_steps})")
         def on_step(state):
             nonlocal global_step
             global_step = epoch_start_step + state["steps"]
             if global_step % config.checkpoint_every_steps == 0:
                 save_resume_checkpoint(output, model, optimizer, scheduler, config, identity,
                                        progress_state(epoch, state))
+                elapsed = time.monotonic() - started_at
+                completed_this_session = max(1, global_step - session_start_step)
+                remaining = max(0, total_steps - global_step) * elapsed / completed_this_session
+                report(f"Epoch {epoch}/{config.epochs} | step {global_step}/{total_steps} "
+                       f"({global_step / total_steps:.1%}) | train loss {state['total_loss'] / max(1, state['count']):.4f} "
+                       f"| elapsed {elapsed / 60:.1f}m | ETA {remaining / 60:.1f}m "
+                       f"| checkpoint saved")
         training = train_epoch(model, train_batches, optimizer, device, config.accumulation_steps,
                                config.max_grad_norm, scheduler,
                                **({"resume_state": partial, "on_step": on_step} if identity is not None else {}))
@@ -99,6 +115,10 @@ def fit_with_validation(model, train_batches, validation_batches, optimizer, con
             save_resume_checkpoint(output, model, optimizer, scheduler, config, identity,
                                    progress_state(epoch + 1, None), phase=1)
         journal()
+        report(f"Epoch {epoch}/{config.epochs} complete | train loss {training['loss']:.4f} "
+               f"| validation macro-F1 {validation['macro_f1']:.4f} "
+               f"| validation accuracy {validation['accuracy']:.4f} "
+               f"| best epoch {selector.best_epoch}")
     restored = load_checkpoint(best_path, model, config)
     if restored.get("provenance") != provenance or restored.get("epoch") != selector.best_epoch:
         raise ValueError("Selected checkpoint provenance/epoch mismatch.")
