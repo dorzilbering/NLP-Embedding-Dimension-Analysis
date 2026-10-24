@@ -49,10 +49,10 @@ def main():
         save(fig, out, metric)
 
     metrics = [
-        ('validation_macro_f1', 'Validation Macro-F1'),
-        ('validation_accuracy', 'Validation Accuracy'),
-        ('training_loss', 'Training Loss'),
-        ('validation_loss', 'Validation Loss'),
+        ('val_macro_f1', 'Validation Macro-F1'),
+        ('val_accuracy', 'Validation Accuracy'),
+        ('train_loss', 'Training Loss'),
+        ('val_loss', 'Validation Loss'),
     ]
     for model, part in history.groupby('model'):
         slug = 'llama' if 'llama' in model.lower() else 'phi4' if 'phi' in model.lower() else model.lower().replace(' ', '_')
