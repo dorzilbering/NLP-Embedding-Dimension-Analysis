@@ -1,0 +1,7 @@
+model,dimension,test_macro_f1,test_accuracy
+Llama3.2-3B,3072,0.7488,0.7659
+Llama3.2-3B,1536,0.8448,0.8468
+Llama3.2-3B,768,0.7962,0.8029
+Phi4-mini,3072,0.3646,0.3890
+Phi4-mini,1536,0.7053,0.7211
+Phi4-mini,768,0.7171,0.7308
